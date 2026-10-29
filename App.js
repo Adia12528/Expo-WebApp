@@ -16,6 +16,9 @@ import {
   KeyboardAvoidingView,
   Pressable,
   Alert,
+  Share,
+  ScrollView,
+  Clipboard,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -60,6 +63,9 @@ const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 const ANDROID_MOBILE_UA =
   "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
 
+// ──────────────────────────────────────────────────────────────
+// Utility: URL helpers
+// ──────────────────────────────────────────────────────────────
 function normalizeUrl(input) {
   let url = input.trim();
   if (!url) return null;
@@ -99,6 +105,29 @@ function isAllowed(url, site) {
   } catch (e) {
     return true;
   }
+}
+
+// ──────────────────────────────────────────────────────────────
+// Utility: Human-readable relative time
+// ──────────────────────────────────────────────────────────────
+function getTimeAgo(isoTs) {
+  if (!isoTs) return null;
+  const now = Date.now();
+  const ts = typeof isoTs === "number" ? isoTs : new Date(isoTs).getTime();
+  const diffMs = now - ts;
+  if (diffMs < 0) return "Just now";
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 45) return "Just now";
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin} min ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  if (diffDay === 1) return "Yesterday";
+  if (diffDay < 7) return `${diffDay} days ago`;
+  const diffWk = Math.floor(diffDay / 7);
+  if (diffWk === 1) return "1 week ago";
+  return `${diffWk} weeks ago`;
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -364,9 +393,10 @@ function GlassFavicon({ url, name, theme }) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Site Tile: Liquid Glass Card with spring press & inline actions
+// Site Tile: Liquid Glass Card with spring press, pin badge,
+//            visit counter, share & inline actions
 // ──────────────────────────────────────────────────────────────
-function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin }) {
+function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
   const scale = useSharedValue(1);
   const [showMenu, setShowMenu] = useState(false);
 
@@ -381,6 +411,21 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin }) {
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
   }));
+
+  const handleShare = async () => {
+    setShowMenu(false);
+    try {
+      await Share.share({
+        title: item.name,
+        message: `${item.name} — ${item.url}`,
+        url: item.url, // iOS only
+      });
+    } catch (e) {
+      // Share sheet dismissed or failed — silently ignore
+    }
+  };
+
+  const timeAgo = getTimeAgo(item.lastVisited);
 
   return (
     <Animated.View style={[styles.tileOuter, animatedStyle]}>
@@ -397,14 +442,27 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin }) {
 
             {/* Info */}
             <View style={styles.tileInfo}>
-              <Text style={[styles.tileName, { color: theme.textPrimary }]} numberOfLines={1}>
-                {item.name}
-              </Text>
+              <View style={styles.tileNameRow}>
+                <Text style={[styles.tileName, { color: theme.textPrimary }]} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                {item.pinned && (
+                  <Text style={styles.tilePinBadge}>⭐</Text>
+                )}
+              </View>
               <View style={[styles.domainChip, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
                 <Text style={[styles.tileUrl, { color: theme.textSecondary }]} numberOfLines={1}>
                   {hostnameOf(item.url)}
                 </Text>
               </View>
+              {/* Visit count / last visited label */}
+              {(item.visitCount > 0 || item.lastVisited) && (
+                <Text style={[styles.tileVisitLabel, { color: theme.textTertiary }]} numberOfLines={1}>
+                  {item.visitCount > 0 ? `• ${item.visitCount} visit${item.visitCount !== 1 ? "s" : ""}` : ""}
+                  {item.visitCount > 0 && timeAgo ? "  " : ""}
+                  {timeAgo ? timeAgo : ""}
+                </Text>
+              )}
             </View>
 
             {/* Actions Menu Trigger */}
@@ -434,6 +492,54 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin }) {
               <Text style={[styles.menuHeaderTitle, { color: theme.textPrimary }]}>{item.name}</Text>
               <Text style={[styles.menuHeaderSub, { color: theme.textSecondary }]}>{item.url}</Text>
 
+              {/* Pin / Unpin */}
+              <TouchableOpacity
+                style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={() => {
+                  setShowMenu(false);
+                  onPin(item.id);
+                }}
+              >
+                <Text style={styles.menuItemIcon}>{item.pinned ? "★" : "☆"}</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>
+                    {item.pinned ? "Unpin Site" : "Pin to Top"}
+                  </Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>
+                    {item.pinned ? "Remove from pinned section" : "Keeps this site at the top of your deck"}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Share */}
+              <TouchableOpacity
+                style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={handleShare}
+              >
+                <Text style={styles.menuItemIcon}>↗</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Share Site</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>Share URL via your device's share sheet</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Copy Link */}
+              <TouchableOpacity
+                style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={() => {
+                  setShowMenu(false);
+                  Clipboard.setString(item.url);
+                  Alert.alert("Copied!", `${item.url} copied to clipboard.`);
+                }}
+              >
+                <Text style={styles.menuItemIcon}>📋</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Copy Link</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>Copy this site's URL to clipboard</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Forget Login */}
               <TouchableOpacity
                 style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
                 onPress={() => {
@@ -448,6 +554,7 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin }) {
                 </View>
               </TouchableOpacity>
 
+              {/* Delete */}
               <TouchableOpacity
                 style={styles.menuItem}
                 onPress={() => {
@@ -521,6 +628,40 @@ function GlassShimmer({ theme }) {
 }
 
 // ──────────────────────────────────────────────────────────────
+// Recently Visited Pill (compact glass pill for the horizontal row)
+// ──────────────────────────────────────────────────────────────
+function RecentPill({ item, theme, onOpen }) {
+  const [faviconError, setFaviconError] = useState(false);
+  return (
+    <TouchableOpacity
+      onPress={() => onOpen(item)}
+      activeOpacity={0.82}
+      style={styles.recentPillOuter}
+    >
+      <GlassSurface theme={theme} radius={radii.pill} style={styles.recentPillGlass}>
+        <View style={styles.recentPillRow}>
+          {!faviconError ? (
+            <Image
+              source={{ uri: getFaviconUrl(item.url) }}
+              style={styles.recentPillFavicon}
+              onError={() => setFaviconError(true)}
+              resizeMode="contain"
+            />
+          ) : (
+            <View style={[styles.recentPillFaviconFallback, { backgroundColor: theme.accent }]}>
+              <Text style={styles.recentPillFaviconLetter}>{(item.name || "S")[0]}</Text>
+            </View>
+          )}
+          <Text style={[styles.recentPillName, { color: theme.textPrimary }]} numberOfLines={1}>
+            {item.name}
+          </Text>
+        </View>
+      </GlassSurface>
+    </TouchableOpacity>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────
 // Home Screen (Liquid Glass VisionOS Style with User Profile & Cloud Sync)
 // ──────────────────────────────────────────────────────────────
 function HomeScreen({
@@ -536,12 +677,14 @@ function HomeScreen({
   onAdd,
   onDelete,
   onForgetLogin,
+  onPin,
 }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [profileModal, setProfileModal] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [nameInput, setNameInput] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
   const insets = useSafeAreaInsets();
 
   const resetForm = () => {
@@ -571,6 +714,74 @@ function HomeScreen({
     const ok = await onSyncCloud();
     setSyncStatus(ok ? "Synced ✓" : "Sync Failed");
     setTimeout(() => setSyncStatus(""), 2500);
+  };
+
+  // ── Search / filter ────────────────────────────────────────────
+  const lowerQuery = searchQuery.toLowerCase().trim();
+  const filteredSites = lowerQuery
+    ? sites.filter(
+        (s) =>
+          s.name.toLowerCase().includes(lowerQuery) ||
+          hostnameOf(s.url).toLowerCase().includes(lowerQuery)
+      )
+    : sites;
+
+  // ── Pinned / unpinned split ────────────────────────────────────
+  const pinnedSites = filteredSites.filter((s) => s.pinned);
+  const unpinnedSites = filteredSites.filter((s) => !s.pinned);
+
+  // ── Recently visited row (last 3 sites with a lastVisited, sorted desc) ─
+  const recentSites = [...sites]
+    .filter((s) => !!s.lastVisited)
+    .sort((a, b) => {
+      const ta = typeof a.lastVisited === "number" ? a.lastVisited : new Date(a.lastVisited).getTime();
+      const tb = typeof b.lastVisited === "number" ? b.lastVisited : new Date(b.lastVisited).getTime();
+      return tb - ta;
+    })
+    .slice(0, 3);
+
+  // Build the FlatList data with section headers inserted
+  const listData = [];
+  if (recentSites.length > 0 && !lowerQuery) {
+    listData.push({ _type: "recentRow", key: "__recent__" });
+  }
+  if (pinnedSites.length > 0) {
+    listData.push({ _type: "sectionHeader", label: "⭐  Pinned", key: "__pinned_header__" });
+    pinnedSites.forEach((s) => listData.push({ ...s, _type: "site" }));
+  }
+  if (unpinnedSites.length > 0 && pinnedSites.length > 0) {
+    listData.push({ _type: "sectionHeader", label: "All Sites", key: "__all_header__" });
+  }
+  unpinnedSites.forEach((s) => listData.push({ ...s, _type: "site" }));
+
+  const renderListItem = ({ item }) => {
+    if (item._type === "recentRow") {
+      return (
+        <View style={styles.recentRowWrap}>
+          <Text style={[styles.recentRowLabel, { color: theme.textSecondary }]}>Recently Visited</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.recentScroll} contentContainerStyle={styles.recentScrollContent}>
+            {recentSites.map((rs) => (
+              <RecentPill key={rs.id} item={rs} theme={theme} onOpen={onOpen} />
+            ))}
+          </ScrollView>
+        </View>
+      );
+    }
+    if (item._type === "sectionHeader") {
+      return (
+        <Text style={[styles.sectionHeaderLabel, { color: theme.textSecondary }]}>{item.label}</Text>
+      );
+    }
+    return (
+      <SiteTile
+        item={item}
+        theme={theme}
+        onOpen={onOpen}
+        onDelete={onDelete}
+        onForgetLogin={onForgetLogin}
+        onPin={onPin}
+      />
+    );
   };
 
   return (
@@ -665,6 +876,30 @@ function HomeScreen({
           </GlassSurface>
         </View>
 
+        {/* Search / Filter Bar */}
+        <View style={styles.searchBarPad}>
+          <GlassSurface theme={theme} radius={radii.lg} style={styles.searchBarGlass} highlight={false}>
+            <View style={styles.searchBarRow}>
+              <Text style={styles.searchBarIcon}>🔍</Text>
+              <TextInput
+                style={[styles.searchBarInput, { color: theme.textPrimary }]}
+                placeholder="Search saved sites…"
+                placeholderTextColor={theme.textTertiary}
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoCorrect={false}
+                autoCapitalize="none"
+                clearButtonMode="while-editing"
+              />
+              {searchQuery.length > 0 && (
+                <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                  <Text style={[styles.searchClearIcon, { color: theme.textTertiary }]}>✕</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          </GlassSurface>
+        </View>
+
         {/* Saved Sites List / Empty State */}
         {sites.length === 0 ? (
           <View style={styles.emptyWrap}>
@@ -713,21 +948,24 @@ function HomeScreen({
               </View>
             </GlassSurface>
           </View>
+        ) : filteredSites.length === 0 && lowerQuery ? (
+          /* No results card */
+          <View style={styles.noResultsWrap}>
+            <GlassSurface theme={theme} radius={radii.xl} style={styles.noResultsGlass}>
+              <Text style={styles.noResultsEmoji}>🔍</Text>
+              <Text style={[styles.noResultsTitle, { color: theme.textPrimary }]}>No results</Text>
+              <Text style={[styles.noResultsSub, { color: theme.textSecondary }]}>
+                No saved sites match "{searchQuery}"
+              </Text>
+            </GlassSurface>
+          </View>
         ) : (
           <FlatList
-            data={sites}
-            keyExtractor={(item) => item.id}
+            data={listData}
+            keyExtractor={(item) => item.key ?? item.id}
             contentContainerStyle={[styles.listContent, { paddingBottom: insets.bottom + 100 }]}
             showsVerticalScrollIndicator={false}
-            renderItem={({ item }) => (
-              <SiteTile
-                item={item}
-                theme={theme}
-                onOpen={onOpen}
-                onDelete={onDelete}
-                onForgetLogin={onForgetLogin}
-              />
-            )}
+            renderItem={renderListItem}
             ListFooterComponent={
               <View style={styles.devCreditWrap}>
                 <Text style={[styles.devCreditText, { color: theme.textTertiary }]}>
@@ -796,6 +1034,11 @@ function HomeScreen({
                     )}
                     <Text style={[styles.profileModalName, { color: theme.textPrimary }]}>{user.name}</Text>
                     <Text style={[styles.profileModalEmail, { color: theme.textSecondary }]}>{user.email}</Text>
+                    {user.isDemo && (
+                      <Text style={[styles.profileDemoBadge, { color: theme.textTertiary }]}>
+                        Demo Mode — set googleClientId in config.js for real sign-in
+                      </Text>
+                    )}
 
                     <View style={styles.cloudSyncBox}>
                       <TouchableOpacity
@@ -973,7 +1216,8 @@ function HomeScreen({
 }
 
 // ──────────────────────────────────────────────────────────────
-// Site Screen: Fresh Load, Persistent Cookies, Google OAuth Handling
+// Site Screen: Fresh Load, Persistent Cookies, Progress Bar,
+//              Google OAuth Handling
 // ──────────────────────────────────────────────────────────────
 function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
   const webviewRef = useRef(null);
@@ -983,6 +1227,19 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
   const [canGoBack, setCanGoBack] = useState(false);
   const [reloadKey, setReloadKey] = useState(() => Date.now());
   const insets = useSafeAreaInsets();
+
+  // Animated progress bar width (smooth transitions instead of abrupt jumps)
+  const progressAnim = useSharedValue(0.1);
+  const progressBarStyle = useAnimatedStyle(() => ({
+    width: `${progressAnim.value * 100}%`,
+  }));
+
+  useEffect(() => {
+    progressAnim.value = withTiming(Math.max(progress, 0.1), {
+      duration: 280,
+      easing: Easing.out(Easing.quad),
+    });
+  }, [progress, progressAnim]);
 
   // Force a fresh load timestamp on every open (bypasses browser and webview caches)
   const freshUrl = `${site.url}${site.url.includes("?") ? "&" : "?"}_fresh_ts=${reloadKey}`;
@@ -1209,6 +1466,23 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
               </TouchableOpacity>
 
               <TouchableOpacity
+                onPress={() => {
+                  Clipboard.setString(site.url);
+                  Alert.alert("Copied!", `${site.url} copied to clipboard.`);
+                }}
+                style={[
+                  styles.siteHeaderIconBtn,
+                  {
+                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                    borderColor: theme.glassBorder,
+                  },
+                ]}
+                accessibilityLabel="Copy URL to clipboard"
+              >
+                <Text style={styles.siteHeaderActionIcon}>📋</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
                 onPress={() => Linking.openURL(site.url)}
                 style={[
                   styles.siteHeaderIconBtn,
@@ -1224,15 +1498,17 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
             </View>
           </View>
 
-          {/* Liquid Glass Progress Bar */}
+          {/* Liquid Glass Progress Bar — smoothly animated via Reanimated */}
           {config.showProgressBar && loading && !hasError && (
             <View style={styles.progressTrack}>
-              <LinearGradient
-                colors={theme.accentGradient}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-                style={[styles.progressBar, { width: `${Math.max(progress * 100, 10)}%` }]}
-              />
+              <Animated.View style={[styles.progressBarAnimated, progressBarStyle]}>
+                <LinearGradient
+                  colors={theme.accentGradient}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={StyleSheet.absoluteFillObject}
+                />
+              </Animated.View>
             </View>
           )}
         </GlassSurface>
@@ -1302,8 +1578,35 @@ export default function App() {
     [user]
   );
 
-  const handleAdd = (site) => persistSites([site, ...sites]);
+  const handleAdd = (site) =>
+    persistSites([
+      { ...site, pinned: false, visitCount: 0, lastVisited: null },
+      ...sites,
+    ]);
+
   const handleDelete = (id) => persistSites(sites.filter((s) => s.id !== id));
+
+  // Toggle pin state for a site
+  const handlePin = (id) => {
+    const next = sites.map((s) =>
+      s.id === id ? { ...s, pinned: !s.pinned } : s
+    );
+    persistSites(next);
+  };
+
+  // Open a site — increment visitCount + set lastVisited before navigating
+  const handleOpen = (item) => {
+    const now = Date.now();
+    const updated = sites.map((s) =>
+      s.id === item.id
+        ? { ...s, visitCount: (s.visitCount || 0) + 1, lastVisited: now }
+        : s
+    );
+    persistSites(updated);
+    // Use the freshly updated version of the site for SiteScreen
+    const fresh = updated.find((s) => s.id === item.id) || item;
+    setActiveSite(fresh);
+  };
 
   // In-app Google Sign-In handler
   const handleSignIn = async () => {
@@ -1388,10 +1691,11 @@ export default function App() {
             onSignOut={handleSignOut}
             onSyncCloud={handleSyncCloud}
             onToggleTheme={toggleTheme}
-            onOpen={setActiveSite}
+            onOpen={handleOpen}
             onAdd={handleAdd}
             onDelete={handleDelete}
             onForgetLogin={handleForgetLogin}
+            onPin={handlePin}
           />
         )}
       </Animated.View>
@@ -1560,6 +1864,126 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
 
+  // Search Bar
+  searchBarPad: {
+    paddingHorizontal: 16,
+    paddingBottom: 6,
+  },
+  searchBarGlass: {
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  searchBarRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  searchBarIcon: {
+    fontSize: 15,
+    marginRight: 8,
+  },
+  searchBarInput: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "500",
+  },
+  searchClearIcon: {
+    fontSize: 13,
+    fontWeight: "700",
+    marginLeft: 8,
+  },
+
+  // Section Headers
+  sectionHeaderLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    paddingHorizontal: 4,
+    paddingTop: 8,
+    paddingBottom: 6,
+  },
+
+  // No results
+  noResultsWrap: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 32,
+  },
+  noResultsGlass: {
+    width: "100%",
+    padding: 28,
+    alignItems: "center",
+  },
+  noResultsEmoji: {
+    fontSize: 36,
+    marginBottom: 10,
+  },
+  noResultsTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 4,
+  },
+  noResultsSub: {
+    fontSize: 13,
+    textAlign: "center",
+    lineHeight: 18,
+  },
+
+  // Recently Visited Row
+  recentRowWrap: {
+    marginBottom: 8,
+  },
+  recentRowLabel: {
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    paddingHorizontal: 4,
+    marginBottom: 8,
+  },
+  recentScroll: {
+    flexGrow: 0,
+  },
+  recentScrollContent: {
+    paddingRight: 8,
+  },
+  recentPillOuter: {
+    marginRight: 8,
+  },
+  recentPillGlass: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  recentPillRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  recentPillFavicon: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    marginRight: 6,
+  },
+  recentPillFaviconFallback: {
+    width: 18,
+    height: 18,
+    borderRadius: 4,
+    marginRight: 6,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recentPillFaviconLetter: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "700",
+  },
+  recentPillName: {
+    fontSize: 13,
+    fontWeight: "700",
+    maxWidth: 100,
+  },
+
   // Tiles
   listContent: {
     paddingHorizontal: 16,
@@ -1609,10 +2033,19 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
   },
+  tileNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
   tileName: {
     fontSize: 16,
     fontWeight: "700",
     letterSpacing: -0.2,
+    flex: 1,
+  },
+  tilePinBadge: {
+    fontSize: 13,
+    marginLeft: 4,
   },
   domainChip: {
     alignSelf: "flex-start",
@@ -1624,6 +2057,11 @@ const styles = StyleSheet.create({
   tileUrl: {
     fontSize: 12,
     fontWeight: "500",
+  },
+  tileVisitLabel: {
+    fontSize: 11,
+    fontWeight: "500",
+    marginTop: 4,
   },
   dotsButton: {
     width: 36,
@@ -1801,7 +2239,14 @@ const styles = StyleSheet.create({
   },
   profileModalEmail: {
     fontSize: 13,
-    marginBottom: 20,
+    marginBottom: 6,
+  },
+  profileDemoBadge: {
+    fontSize: 11,
+    fontStyle: "italic",
+    textAlign: "center",
+    marginBottom: 16,
+    paddingHorizontal: 16,
   },
   cloudSyncBox: {
     width: "100%",
@@ -2027,9 +2472,11 @@ const styles = StyleSheet.create({
     overflow: "hidden",
     marginTop: 8,
   },
-  progressBar: {
+  // Animated progress bar (Reanimated Animated.View, uses LinearGradient as fill)
+  progressBarAnimated: {
     height: "100%",
     borderRadius: 2,
+    overflow: "hidden",
   },
 
   // Shimmer / Pulse Skeleton

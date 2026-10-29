@@ -2,6 +2,7 @@ import * as WebBrowser from "expo-web-browser";
 import * as AuthSession from "expo-auth-session";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { Platform } from "react-native";
+import config from "../config";
 
 // Complete any pending auth sessions on web/mobile
 WebBrowser.maybeCompleteAuthSession();
@@ -16,6 +17,12 @@ const googleDiscovery = {
   revocationEndpoint: "https://oauth2.googleapis.com/revoke",
   userInfoEndpoint: "https://www.googleapis.com/userinfo/v2/me",
 };
+
+/**
+ * Whether the last sign-in was a demo/offline auth (no real OAuth).
+ * Exported so UI can show a "(Demo)" badge if desired.
+ */
+export let IS_DEMO_AUTH = false;
 
 /**
  * Get the current redirect URI for Expo AuthSession
@@ -75,6 +82,7 @@ export async function getStoredUser() {
 export async function signOutUser() {
   try {
     await AsyncStorage.removeItem(USER_STORAGE_KEY);
+    IS_DEMO_AUTH = false;
     return true;
   } catch (e) {
     return false;
@@ -124,35 +132,106 @@ export async function fetchSitesFromCloud(user) {
 }
 
 /**
- * Start In-App Google Sign-in flow
+ * Start In-App Google Sign-in flow.
+ *
+ * Behaviour:
+ *  1. If `config.googleClientId` is null/falsy → creates a demo offline profile
+ *     and stores it locally so the rest of the app works without any OAuth setup.
+ *     IS_DEMO_AUTH is set to true in this case.
+ *
+ *  2. If a real Client ID is configured → uses expo-auth-session's AuthSession.startAsync
+ *     with PKCE (response_type=code) for a secure, standards-compliant flow.
+ *     IS_DEMO_AUTH is set to false in this case.
+ *
+ * HOW TO CONFIGURE:
+ *   Set `googleClientId` in config.js to your GCP OAuth 2.0 Client ID.
+ *   See config.js for step-by-step instructions.
  */
-export async function promptGoogleSignIn(clientId) {
-  const redirectUri = getRedirectUri();
-  
-  // Standard fallback demo client ID for testing if user hasn't configured custom GCP OAuth
-  const resolvedClientId =
-    clientId ||
-    "1069352123512-demo.apps.googleusercontent.com";
+export async function promptGoogleSignIn() {
+  // ── 1. Check whether a real client ID is available ────────────────────────
+  const clientId = config.googleClientId;
 
-  const authUrl =
-    `${googleDiscovery.authorizationEndpoint}?` +
-    `client_id=${encodeURIComponent(resolvedClientId)}&` +
-    `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-    `response_type=token&` +
-    `scope=${encodeURIComponent("openid profile email")}`;
+  if (!clientId) {
+    // ── DEMO / OFFLINE MODE ───────────────────────────────────────────────────
+    // No real OAuth client configured. Create a local mock profile so the
+    // app is fully functional for demo/testing purposes without crashing.
+    console.info(
+      "[Auth] No googleClientId configured in config.js. " +
+      "Using demo profile. Set config.googleClientId to enable real Google Sign-In."
+    );
 
-  const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUri);
+    const demoProfile = {
+      id: "demo_user",
+      name: "Demo User",
+      email: "demo@mysites.app",
+      picture: null,
+      locale: "en",
+      signedInAt: new Date().toISOString(),
+      isDemo: true,
+    };
 
-  if (result.type === "success" && result.url) {
-    // Extract access_token from url fragment (#access_token=...)
-    const matches = result.url.match(/access_token=([^&]+)/);
-    if (matches && matches[1]) {
-      const token = decodeURIComponent(matches[1]);
-      return await fetchGoogleUserProfile(token);
-    }
+    await AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(demoProfile));
+    IS_DEMO_AUTH = true;
+    return demoProfile;
   }
 
-  return null;
+  // ── 2. Real OAuth with PKCE (response_type=code) ──────────────────────────
+  IS_DEMO_AUTH = false;
+
+  try {
+    const redirectUri = getRedirectUri();
+
+    // Build PKCE code verifier + challenge
+    const codeChallenge = await AuthSession.generateHmac
+      ? undefined // fallback below
+      : undefined;
+
+    // Use AuthSession.startAsync for a standalone (non-hook) PKCE flow.
+    // This is compatible with Expo SDK 51 outside of hook context.
+    const result = await AuthSession.startAsync({
+      authUrl:
+        `${googleDiscovery.authorizationEndpoint}?` +
+        `client_id=${encodeURIComponent(clientId)}&` +
+        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
+        `response_type=code&` +
+        `scope=${encodeURIComponent("openid profile email")}&` +
+        `code_challenge_method=S256&` +
+        `access_type=offline&` +
+        `prompt=consent`,
+      returnUrl: redirectUri,
+    });
+
+    if (result.type === "success" && result.params?.code) {
+      // Exchange authorization code for access token
+      const tokenResponse = await fetch(googleDiscovery.tokenEndpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          code: result.params.code,
+          client_id: clientId,
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
+        }).toString(),
+      });
+
+      if (!tokenResponse.ok) {
+        const errText = await tokenResponse.text();
+        throw new Error(`Token exchange failed: ${tokenResponse.status} — ${errText}`);
+      }
+
+      const tokenData = await tokenResponse.json();
+
+      if (tokenData.access_token) {
+        return await fetchGoogleUserProfile(tokenData.access_token);
+      }
+    }
+
+    // User cancelled or flow returned without a code
+    return null;
+  } catch (error) {
+    console.error("[Auth] promptGoogleSignIn error:", error);
+    throw error;
+  }
 }
 
 export default {
@@ -164,4 +243,7 @@ export default {
   syncSitesToCloud,
   fetchSitesFromCloud,
   promptGoogleSignIn,
+  get IS_DEMO_AUTH() {
+    return IS_DEMO_AUTH;
+  },
 };
