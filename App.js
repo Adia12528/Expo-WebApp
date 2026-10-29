@@ -26,6 +26,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
 import * as WebBrowser from "expo-web-browser";
+import * as LocalAuthentication from "expo-local-authentication";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -60,6 +61,20 @@ const THEME_PREF_KEY = "user_theme_pref_v1";
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 // Custom User-Agent on Android to prevent Google 403 disallowed_useragent
+const DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36";
+const AD_BLOCK_DOMAINS = [
+  "doubleclick.net",
+  "googlesyndication.com",
+  "googleadservices.com",
+  "adnxs.com",
+  "scorecardresearch.com",
+  "taboola.com",
+  "outbrain.com",
+  "criteo.com"
+];
+const APP_CATEGORIES = ["All", "Work", "Social", "Dev", "Media", "Finance"];
+const BIOMETRIC_STORAGE_KEY = "user_biometric_lock_v1";
+
 const ANDROID_MOBILE_UA =
   "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
 
@@ -450,10 +465,17 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
                   <Text style={styles.tilePinBadge}>⭐</Text>
                 )}
               </View>
-              <View style={[styles.domainChip, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
-                <Text style={[styles.tileUrl, { color: theme.textSecondary }]} numberOfLines={1}>
-                  {hostnameOf(item.url)}
-                </Text>
+              <View style={styles.domainChipRow}>
+                <View style={[styles.domainChip, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)" }]}>
+                  <Text style={[styles.tileUrl, { color: theme.textSecondary }]} numberOfLines={1}>
+                    {hostnameOf(item.url)}
+                  </Text>
+                </View>
+                {item.category && item.category !== "All" && (
+                  <View style={[styles.categoryBadge, { backgroundColor: theme.accentGlow }]}>
+                    <Text style={[styles.categoryBadgeText, { color: theme.accent }]}>{item.category}</Text>
+                  </View>
+                )}
               </View>
               {/* Visit count / last visited label */}
               {(item.visitCount > 0 || item.lastVisited) && (
@@ -669,6 +691,8 @@ function HomeScreen({
   theme,
   isDark,
   user,
+  biometricEnabled,
+  onToggleBiometric,
   onSignIn,
   onSignOut,
   onSyncCloud,
@@ -685,11 +709,14 @@ function HomeScreen({
   const [nameInput, setNameInput] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [selectedCategory, setSelectedCategory] = useState("All");
+  const [categoryInput, setCategoryInput] = useState("All");
   const insets = useSafeAreaInsets();
 
   const resetForm = () => {
     setUrlInput("");
     setNameInput("");
+    setCategoryInput("All");
   };
 
   const handleSave = () => {
@@ -704,6 +731,7 @@ function HomeScreen({
       id: `${Date.now()}`,
       url: normalized,
       name: nameInput.trim() || hostnameOf(normalized),
+      category: categoryInput || "All",
     });
     resetForm();
     setModalVisible(false);
@@ -716,15 +744,18 @@ function HomeScreen({
     setTimeout(() => setSyncStatus(""), 2500);
   };
 
-  // ── Search / filter ────────────────────────────────────────────
+  // ── Search & Category filter ────────────────────────────────────
   const lowerQuery = searchQuery.toLowerCase().trim();
+  const categoryMatched = selectedCategory === "All"
+    ? sites
+    : sites.filter((s) => s.category === selectedCategory);
   const filteredSites = lowerQuery
-    ? sites.filter(
+    ? categoryMatched.filter(
         (s) =>
           s.name.toLowerCase().includes(lowerQuery) ||
           hostnameOf(s.url).toLowerCase().includes(lowerQuery)
       )
-    : sites;
+    : categoryMatched;
 
   // ── Pinned / unpinned split ────────────────────────────────────
   const pinnedSites = filteredSites.filter((s) => s.pinned);
@@ -858,6 +889,24 @@ function HomeScreen({
                 )}
 
                 <TouchableOpacity
+                  onPress={onToggleBiometric}
+                  style={[
+                    styles.themeToggle,
+                    {
+                      backgroundColor: biometricEnabled
+                        ? theme.accent
+                        : theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.05)",
+                      borderColor: biometricEnabled ? theme.accent : theme.glassBorder,
+                      marginRight: 6,
+                    },
+                  ]}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Toggle App Lock"
+                >
+                  <Text style={styles.themeToggleIcon}>{biometricEnabled ? "🔒" : "🔓"}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
                   onPress={onToggleTheme}
                   style={[
                     styles.themeToggle,
@@ -874,6 +923,42 @@ function HomeScreen({
               </View>
             </View>
           </GlassSurface>
+        </View>
+
+        {/* Category Horizontal Pills */}
+        <View style={styles.categoryBarPad}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryBarContent}>
+            {APP_CATEGORIES.map((cat) => {
+              const isSelected = selectedCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  onPress={() => setSelectedCategory(cat)}
+                  style={[
+                    styles.categoryPill,
+                    {
+                      backgroundColor: isSelected
+                        ? theme.accent
+                        : theme.isDark
+                        ? "rgba(255, 255, 255, 0.07)"
+                        : "rgba(0, 0, 0, 0.05)",
+                      borderColor: isSelected ? theme.accent : theme.glassBorder,
+                    },
+                  ]}
+                  activeOpacity={0.8}
+                >
+                  <Text
+                    style={[
+                      styles.categoryPillText,
+                      { color: isSelected ? "#FFFFFF" : theme.textSecondary, fontWeight: isSelected ? "700" : "500" },
+                    ]}
+                  >
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
         </View>
 
         {/* Search / Filter Bar */}
@@ -1172,6 +1257,42 @@ function HomeScreen({
                   />
                 </View>
 
+                {/* Category Selection in Add Modal */}
+                <View style={styles.modalCategorySection}>
+                  <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Select Category</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modalCategoryScroll}>
+                    {APP_CATEGORIES.filter(c => c !== "All").map((cat) => {
+                      const isSel = categoryInput === cat;
+                      return (
+                        <TouchableOpacity
+                          key={cat}
+                          onPress={() => setCategoryInput(isSel ? "All" : cat)}
+                          style={[
+                            styles.modalCategoryPill,
+                            {
+                              backgroundColor: isSel
+                                ? theme.accent
+                                : theme.isDark
+                                ? "rgba(255, 255, 255, 0.07)"
+                                : "rgba(0, 0, 0, 0.05)",
+                              borderColor: isSel ? theme.accent : theme.glassBorder,
+                            },
+                          ]}
+                        >
+                          <Text
+                            style={[
+                              styles.modalCategoryPillText,
+                              { color: isSel ? "#FFFFFF" : theme.textSecondary, fontWeight: isSel ? "700" : "500" },
+                            ]}
+                          >
+                            {cat}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
                 <View style={styles.modalActionRow}>
                   <TouchableOpacity
                     style={[
@@ -1226,6 +1347,8 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
   const [hasError, setHasError] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [reloadKey, setReloadKey] = useState(() => Date.now());
+  const [isDesktop, setIsDesktop] = useState(false);
+  const [adBlockEnabled, setAdBlockEnabled] = useState(true);
   const insets = useSafeAreaInsets();
 
   // Animated progress bar width (smooth transitions instead of abrupt jumps)
@@ -1272,6 +1395,16 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
    */
   const handleShouldStartLoad = (request) => {
     const targetUrl = request.url;
+
+    // Built-in Ad & Tracker Blocker
+    if (adBlockEnabled) {
+      try {
+        const host = new URL(targetUrl).hostname.toLowerCase();
+        if (AD_BLOCK_DOMAINS.some((d) => host.includes(d))) {
+          return false; // Silently drop ad/tracking requests
+        }
+      } catch (e) {}
+    }
 
     // Check if URL is a Google / Apple / OAuth provider login endpoint
     const isGoogleOAuth =
@@ -1379,7 +1512,20 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
             domStorageEnabled
             databaseEnabled
             // 3. User-Agent setting for Android to avoid embedded webview block
-            userAgent={Platform.OS === "android" ? ANDROID_MOBILE_UA : undefined}
+            userAgent={isDesktop ? DESKTOP_UA : (Platform.OS === "android" ? ANDROID_MOBILE_UA : undefined)}
+            injectedJavaScript={`
+              (function() {
+                try {
+                  if (${isDark}) {
+                    var style = document.createElement('style');
+                    style.id = 'mysites-dark-theme-override';
+                    style.textContent = '@media (prefers-color-scheme: light) { html, body { background-color: #0d1117 !important; color: #e6edf3 !important; } }';
+                    document.head.appendChild(style);
+                  }
+                } catch(e) {}
+              })();
+              true;
+            `}
             onLoadStart={() => setLoading(true)}
             onLoadEnd={() => setLoading(false)}
             onLoadProgress={({ nativeEvent }) => setProgress(nativeEvent.progress)}
@@ -1437,6 +1583,47 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
 
             {/* Right Action Controls: Forget Login, Refresh, External link */}
             <View style={styles.siteHeaderActions}>
+              {/* Desktop Mode Toggle */}
+              <TouchableOpacity
+                onPress={() => {
+                  setIsDesktop((prev) => !prev);
+                  setReloadKey(Date.now());
+                }}
+                style={[
+                  styles.siteHeaderIconBtn,
+                  {
+                    backgroundColor: isDesktop
+                      ? theme.accent
+                      : theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                    borderColor: isDesktop ? theme.accent : theme.glassBorder,
+                  },
+                ]}
+                accessibilityLabel="Toggle Desktop View"
+              >
+                <Text style={styles.siteHeaderActionIcon}>🖥️</Text>
+              </TouchableOpacity>
+
+              {/* AdBlocker Toggle */}
+              <TouchableOpacity
+                onPress={() => {
+                  const nextState = !adBlockEnabled;
+                  setAdBlockEnabled(nextState);
+                  Alert.alert("Ad Blocker", nextState ? "Ad blocker enabled." : "Ad blocker paused.");
+                }}
+                style={[
+                  styles.siteHeaderIconBtn,
+                  {
+                    backgroundColor: adBlockEnabled
+                      ? theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"
+                      : "rgba(239, 68, 68, 0.2)",
+                    borderColor: theme.glassBorder,
+                  },
+                ]}
+                accessibilityLabel="Toggle Ad Blocker"
+              >
+                <Text style={styles.siteHeaderActionIcon}>{adBlockEnabled ? "🛡️" : "⚠️"}</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity
                 onPress={() => onForgetLogin(site, webviewRef)}
                 style={[
@@ -1525,6 +1712,8 @@ export default function App() {
   const [activeSite, setActiveSite] = useState(null);
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState(null);
+  const [isLocked, setIsLocked] = useState(false);
+  const [biometricEnabled, setBiometricEnabled] = useState(false);
 
   // Theme preference
   const systemScheme = useColorScheme();
@@ -1542,6 +1731,22 @@ export default function App() {
 
         const savedTheme = await AsyncStorage.getItem(THEME_PREF_KEY);
         if (savedTheme) setThemeMode(savedTheme);
+
+        // Check biometric lock
+        const bioLock = await AsyncStorage.getItem(BIOMETRIC_STORAGE_KEY);
+        if (bioLock === "true") {
+          setBiometricEnabled(true);
+          setIsLocked(true);
+          // Trigger biometric prompt
+          LocalAuthentication.authenticateAsync({
+            promptMessage: "Unlock My Sites",
+            fallbackLabel: "Enter Passcode",
+          }).then((res) => {
+            if (res.success) {
+              setIsLocked(false);
+            }
+          });
+        }
 
         const storedUser = await authService.getStoredUser();
         if (storedUser) {
@@ -1565,6 +1770,26 @@ export default function App() {
     const next = isDark ? "light" : "dark";
     setThemeMode(next);
     AsyncStorage.setItem(THEME_PREF_KEY, next).catch(() => {});
+  };
+
+  const toggleBiometricLock = async () => {
+    const next = !biometricEnabled;
+    setBiometricEnabled(next);
+    await AsyncStorage.setItem(BIOMETRIC_STORAGE_KEY, next ? "true" : "false");
+    Alert.alert(
+      next ? "App Lock Enabled" : "App Lock Disabled",
+      next ? "My Sites is now protected by biometrics." : "App lock turned off."
+    );
+  };
+
+  const unlockWithBiometrics = async () => {
+    const res = await LocalAuthentication.authenticateAsync({
+      promptMessage: "Unlock My Sites",
+      fallbackLabel: "Enter Passcode",
+    });
+    if (res.success) {
+      setIsLocked(false);
+    }
   };
 
   const persistSites = useCallback(
@@ -1673,7 +1898,34 @@ export default function App() {
   return (
     <SafeAreaProvider>
       <Animated.View style={styles.appRoot} entering={FadeIn.duration(300)}>
-        {activeSite ? (
+        {isLocked ? (
+          <View style={[styles.splashScreen, { backgroundColor: theme.background }]}>
+            <DriftingBlobs theme={theme} />
+            <GlassSurface theme={theme} radius={radii.xxl} style={styles.lockCardGlass}>
+              <View style={styles.lockCardContent}>
+                <Text style={styles.lockEmoji}>🔒</Text>
+                <Text style={[styles.lockTitle, { color: theme.textPrimary }]}>My Sites is Locked</Text>
+                <Text style={[styles.lockSub, { color: theme.textSecondary }]}>
+                  Biometric protection is enabled for your logged-in portals.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.unlockBtn, theme.glowShadow]}
+                  onPress={unlockWithBiometrics}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={theme.fabGradient}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.unlockBtnGradient}
+                  >
+                    <Text style={styles.unlockBtnText}>Unlock with Biometrics</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </GlassSurface>
+          </View>
+        ) : activeSite ? (
           <SiteScreen
             site={activeSite}
             theme={theme}
@@ -1687,6 +1939,8 @@ export default function App() {
             theme={theme}
             isDark={isDark}
             user={user}
+            biometricEnabled={biometricEnabled}
+            onToggleBiometric={toggleBiometricLock}
             onSignIn={handleSignIn}
             onSignOut={handleSignOut}
             onSyncCloud={handleSyncCloud}
@@ -2614,6 +2868,105 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   devCreditAuthor: {
+    fontWeight: "700",
+  },
+  // Categories Bar
+  categoryBarPad: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  categoryBarContent: {
+    paddingRight: 16,
+    gap: 8,
+  },
+  categoryPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+  },
+  categoryPillText: {
+    fontSize: 13,
+  },
+  domainChipRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 4,
+  },
+  categoryBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radii.sm,
+  },
+  categoryBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  modalCategorySection: {
+    marginBottom: 16,
+  },
+  modalCategoryTitle: {
+    fontSize: 12,
+    fontWeight: "600",
+    marginBottom: 8,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  modalCategoryScroll: {
+    flexDirection: "row",
+  },
+  modalCategoryPill: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    marginRight: 8,
+  },
+  modalCategoryPillText: {
+    fontSize: 13,
+  },
+
+  // Lock Screen Card
+  lockCardGlass: {
+    width: "88%",
+    maxWidth: 360,
+    padding: 28,
+  },
+  lockCardContent: {
+    alignItems: "center",
+  },
+  lockEmoji: {
+    fontSize: 48,
+    marginBottom: 14,
+  },
+  lockTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  lockSub: {
+    fontSize: 13,
+    lineHeight: 18,
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  unlockBtn: {
+    width: "100%",
+    borderRadius: radii.pill,
+    overflow: "hidden",
+  },
+  unlockBtnGradient: {
+    paddingVertical: 14,
+    alignItems: "center",
+    borderRadius: radii.pill,
+  },
+  unlockBtnText: {
+    color: "#fff",
+    fontSize: 15,
     fontWeight: "700",
   },
 });

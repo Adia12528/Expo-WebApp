@@ -16,14 +16,18 @@
     ],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.adityasoni.mysites"
+      "bundleIdentifier": "com.adityasoni.mysites",
+      "runtimeVersion": {
+        "policy": "appVersion"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#080B14"
       },
-      "package": "com.adityasoni.mysites"
+      "package": "com.adityasoni.mysites",
+      "runtimeVersion": "1.0.0"
     },
     "web": {
       "favicon": "./assets/favicon.png",
@@ -33,6 +37,9 @@
       "eas": {
         "projectId": "1e8cc0ef-6f53-49d6-9cfd-0eeff1307d72"
       }
+    },
+    "updates": {
+      "url": "https://u.expo.dev/1e8cc0ef-6f53-49d6-9cfd-0eeff1307d72"
     }
   }
 }
