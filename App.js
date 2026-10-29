@@ -15,12 +15,14 @@ import {
   Linking,
   KeyboardAvoidingView,
   Pressable,
+  Alert,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { BlurView } from "expo-blur";
 import { LinearGradient } from "expo-linear-gradient";
+import * as WebBrowser from "expo-web-browser";
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -37,6 +39,11 @@ import Animated, {
 import Svg, { Circle, Defs, RadialGradient, Stop } from "react-native-svg";
 import config from "./config";
 import { lightTheme, darkTheme, radii } from "./theme";
+import { forgetSiteLogin } from "./services/cookies";
+import authService from "./services/auth";
+
+// Complete any active web auth session
+WebBrowser.maybeCompleteAuthSession();
 
 // Platform-aware WebView
 let WebView = null;
@@ -48,6 +55,10 @@ if (Platform.OS !== "web") {
 const STORAGE_KEY = "saved_sites_v1";
 const THEME_PREF_KEY = "user_theme_pref_v1";
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get("window");
+
+// Custom User-Agent on Android to prevent Google 403 disallowed_useragent
+const ANDROID_MOBILE_UA =
+  "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
 
 function normalizeUrl(input) {
   let url = input.trim();
@@ -74,7 +85,6 @@ function hostnameOf(url) {
 
 function getFaviconUrl(url) {
   const host = hostnameOf(url);
-  // High-density 128px favicon from Google S2 service
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(host)}&sz=128`;
 }
 
@@ -92,10 +102,9 @@ function isAllowed(url, site) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Liquid Glass Background: Animated drifting mesh blobs
+// Liquid Glass Background: Animated drifting mesh blobs & watermark
 // ──────────────────────────────────────────────────────────────
 function DriftingBlobs({ theme }) {
-  // Shared values for drifting motion
   const blob1X = useSharedValue(SCREEN_WIDTH * 0.15);
   const blob1Y = useSharedValue(SCREEN_HEIGHT * 0.18);
   const blob1Scale = useSharedValue(1);
@@ -109,7 +118,6 @@ function DriftingBlobs({ theme }) {
   const blob3Scale = useSharedValue(0.95);
 
   useEffect(() => {
-    // Gentle liquid movement loops
     blob1X.value = withRepeat(
       withSequence(
         withTiming(SCREEN_WIDTH * 0.35, { duration: 11000, easing: Easing.inOut(Easing.quad) }),
@@ -198,7 +206,7 @@ function DriftingBlobs({ theme }) {
     <View style={StyleSheet.absoluteFillObject} pointerEvents="none">
       <LinearGradient colors={theme.bgGradient} style={StyleSheet.absoluteFillObject} />
 
-      {/* Subtle, nearly visible background trademark watermark */}
+      {/* Very light, nearly visible background trademark watermark */}
       <View style={styles.trademarkContainer} pointerEvents="none">
         <Text
           style={[
@@ -356,12 +364,11 @@ function GlassFavicon({ url, name, theme }) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Site Tile: Liquid Glass Card with spring press & inline delete
+// Site Tile: Liquid Glass Card with spring press & inline actions
 // ──────────────────────────────────────────────────────────────
-function SiteTile({ item, theme, onOpen, onDelete }) {
+function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin }) {
   const scale = useSharedValue(1);
-  const [showConfirm, setShowConfirm] = useState(false);
-  const confirmAnim = useSharedValue(0);
+  const [showMenu, setShowMenu] = useState(false);
 
   const handlePressIn = () => {
     scale.value = withSpring(0.965, { damping: 14, stiffness: 300 });
@@ -371,28 +378,8 @@ function SiteTile({ item, theme, onOpen, onDelete }) {
     scale.value = withSpring(1, { damping: 14, stiffness: 300 });
   };
 
-  const toggleConfirm = (e) => {
-    e?.stopPropagation?.();
-    const next = !showConfirm;
-    setShowConfirm(next);
-    confirmAnim.value = withSpring(next ? 1 : 0, { damping: 15, stiffness: 220 });
-  };
-
-  const handleConfirmDelete = (e) => {
-    e?.stopPropagation?.();
-    scale.value = withTiming(0.8, { duration: 150 }, () => {
-      // deleted
-    });
-    onDelete(item.id);
-  };
-
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ scale: scale.value }],
-  }));
-
-  const deleteSliderStyle = useAnimatedStyle(() => ({
-    opacity: confirmAnim.value,
-    transform: [{ translateX: (1 - confirmAnim.value) * 40 }],
   }));
 
   return (
@@ -420,38 +407,64 @@ function SiteTile({ item, theme, onOpen, onDelete }) {
               </View>
             </View>
 
-            {/* Delete Actions */}
-            {showConfirm ? (
-              <Animated.View style={[styles.confirmWrap, deleteSliderStyle]}>
-                <TouchableOpacity
-                  style={[styles.confirmButton, { backgroundColor: theme.danger }]}
-                  onPress={handleConfirmDelete}
-                >
-                  <Text style={styles.confirmText}>Delete</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.cancelButton, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)" }]}
-                  onPress={toggleConfirm}
-                >
-                  <Text style={[styles.cancelText, { color: theme.textSecondary }]}>✕</Text>
-                </TouchableOpacity>
-              </Animated.View>
-            ) : (
-              <TouchableOpacity
-                style={[
-                  styles.dotsButton,
-                  { backgroundColor: theme.isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.03)" },
-                ]}
-                onPress={toggleConfirm}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                accessibilityLabel="Delete site"
-              >
-                <Text style={[styles.dotsText, { color: theme.textTertiary }]}>•••</Text>
-              </TouchableOpacity>
-            )}
+            {/* Actions Menu Trigger */}
+            <TouchableOpacity
+              style={[
+                styles.dotsButton,
+                { backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)" },
+              ]}
+              onPress={(e) => {
+                e?.stopPropagation?.();
+                setShowMenu(true);
+              }}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              accessibilityLabel="Site actions"
+            >
+              <Text style={[styles.dotsText, { color: theme.textSecondary }]}>•••</Text>
+            </TouchableOpacity>
           </View>
         </GlassSurface>
       </Pressable>
+
+      {/* Action Sheet Modal for Site */}
+      <Modal visible={showMenu} animationType="fade" transparent onRequestClose={() => setShowMenu(false)}>
+        <Pressable style={styles.menuBackdrop} onPress={() => setShowMenu(false)}>
+          <View style={styles.menuContainer}>
+            <GlassSurface theme={theme} radius={radii.xl} style={styles.menuGlass}>
+              <Text style={[styles.menuHeaderTitle, { color: theme.textPrimary }]}>{item.name}</Text>
+              <Text style={[styles.menuHeaderSub, { color: theme.textSecondary }]}>{item.url}</Text>
+
+              <TouchableOpacity
+                style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={() => {
+                  setShowMenu(false);
+                  onForgetLogin(item);
+                }}
+              >
+                <Text style={styles.menuItemIcon}>🔒</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Forget Login / Clear Session</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>Wipes cookies and local storage for this site</Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.menuItem}
+                onPress={() => {
+                  setShowMenu(false);
+                  onDelete(item.id);
+                }}
+              >
+                <Text style={styles.menuItemIcon}>🗑️</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: theme.danger }]}>Delete Site</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>Removes portal from your deck</Text>
+                </View>
+              </TouchableOpacity>
+            </GlassSurface>
+          </View>
+        </Pressable>
+      </Modal>
     </Animated.View>
   );
 }
@@ -508,12 +521,27 @@ function GlassShimmer({ theme }) {
 }
 
 // ──────────────────────────────────────────────────────────────
-// Home Screen (Liquid Glass VisionOS Style)
+// Home Screen (Liquid Glass VisionOS Style with User Profile & Cloud Sync)
 // ──────────────────────────────────────────────────────────────
-function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDelete }) {
+function HomeScreen({
+  sites,
+  theme,
+  isDark,
+  user,
+  onSignIn,
+  onSignOut,
+  onSyncCloud,
+  onToggleTheme,
+  onOpen,
+  onAdd,
+  onDelete,
+  onForgetLogin,
+}) {
   const [modalVisible, setModalVisible] = useState(false);
+  const [profileModal, setProfileModal] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [nameInput, setNameInput] = useState("");
+  const [syncStatus, setSyncStatus] = useState("");
   const insets = useSafeAreaInsets();
 
   const resetForm = () => {
@@ -538,9 +566,15 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
     setModalVisible(false);
   };
 
+  const triggerCloudSync = async () => {
+    setSyncStatus("Syncing...");
+    const ok = await onSyncCloud();
+    setSyncStatus(ok ? "Synced ✓" : "Sync Failed");
+    setTimeout(() => setSyncStatus(""), 2500);
+  };
+
   return (
     <View style={styles.screenRoot}>
-      {/* Dynamic Drifting Blobs */}
       <DriftingBlobs theme={theme} />
 
       <SafeAreaView style={styles.safeContainer} edges={["top", "left", "right"]}>
@@ -576,21 +610,57 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
                 </View>
               </View>
 
-              {/* Theme Toggle Button */}
-              <TouchableOpacity
-                onPress={onToggleTheme}
-                style={[
-                  styles.themeToggle,
-                  {
-                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.05)",
-                    borderColor: theme.glassBorder,
-                  },
-                ]}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessibilityLabel="Toggle appearance"
-              >
-                <Text style={styles.themeToggleIcon}>{isDark ? "🌙" : "☀️"}</Text>
-              </TouchableOpacity>
+              {/* Right Controls: User Profile / Sign-in & Theme Toggle */}
+              <View style={styles.headerRightGroup}>
+                {user ? (
+                  <TouchableOpacity
+                    style={[styles.userChip, { borderColor: theme.glassBorder, backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)" }]}
+                    onPress={() => setProfileModal(true)}
+                  >
+                    {user.picture ? (
+                      <Image source={{ uri: user.picture }} style={styles.userAvatar} />
+                    ) : (
+                      <View style={[styles.userAvatarFallback, { backgroundColor: theme.accent }]}>
+                        <Text style={styles.userAvatarFallbackText}>{(user.name || "U")[0]}</Text>
+                      </View>
+                    )}
+                    <Text style={[styles.userChipText, { color: theme.textPrimary }]} numberOfLines={1}>
+                      {user.name?.split(" ")[0] || "Profile"}
+                    </Text>
+                  </TouchableOpacity>
+                ) : (
+                  <TouchableOpacity
+                    style={[styles.googleSignInBtn, { borderColor: theme.glassBorder }]}
+                    onPress={onSignIn}
+                    activeOpacity={0.85}
+                  >
+                    <LinearGradient
+                      colors={theme.fabGradient}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 1 }}
+                      style={styles.googleSignInGradient}
+                    >
+                      <Text style={styles.googleIconText}>G</Text>
+                      <Text style={styles.googleSignInText}>Sign In</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                )}
+
+                <TouchableOpacity
+                  onPress={onToggleTheme}
+                  style={[
+                    styles.themeToggle,
+                    {
+                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.05)",
+                      borderColor: theme.glassBorder,
+                    },
+                  ]}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityLabel="Toggle appearance"
+                >
+                  <Text style={styles.themeToggleIcon}>{isDark ? "🌙" : "☀️"}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </GlassSurface>
         </View>
@@ -615,7 +685,7 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
                 </Text>
                 <Text style={[styles.emptySubhead, { color: theme.textSecondary }]}>
                   Save any website into your personal liquid glass deck. It opens instantly as a
-                  native app without address bars or clutter.
+                  fresh native app with persistent logins and zero stale caches.
                 </Text>
                 <TouchableOpacity
                   style={[styles.emptyAddBtn, theme.glowShadow]}
@@ -655,6 +725,7 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
                 theme={theme}
                 onOpen={onOpen}
                 onDelete={onDelete}
+                onForgetLogin={onForgetLogin}
               />
             )}
             ListFooterComponent={
@@ -692,6 +763,77 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
           </TouchableOpacity>
         </Animated.View>
 
+        {/* User Profile & Cloud Sync Modal */}
+        <Modal
+          visible={profileModal}
+          animationType="fade"
+          transparent
+          onRequestClose={() => setProfileModal(false)}
+        >
+          <Pressable style={styles.modalBackdrop} onPress={() => setProfileModal(false)}>
+            <Animated.View
+              entering={SlideInDown.springify().damping(18)}
+              style={styles.modalSheetWrap}
+            >
+              <GlassSurface
+                theme={theme}
+                radius={radii.xxl}
+                intensity={theme.blurIntensityHeavy}
+                style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16 }]}
+              >
+                <View style={styles.dragPillHandle}>
+                  <View style={[styles.dragPill, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
+                </View>
+
+                {user && (
+                  <View style={styles.profileModalBody}>
+                    {user.picture ? (
+                      <Image source={{ uri: user.picture }} style={styles.profileModalAvatar} />
+                    ) : (
+                      <View style={[styles.profileModalAvatarFallback, { backgroundColor: theme.accent }]}>
+                        <Text style={styles.profileModalAvatarText}>{(user.name || "U")[0]}</Text>
+                      </View>
+                    )}
+                    <Text style={[styles.profileModalName, { color: theme.textPrimary }]}>{user.name}</Text>
+                    <Text style={[styles.profileModalEmail, { color: theme.textSecondary }]}>{user.email}</Text>
+
+                    <View style={styles.cloudSyncBox}>
+                      <TouchableOpacity
+                        style={[styles.syncButton, theme.glowShadow]}
+                        onPress={triggerCloudSync}
+                      >
+                        <LinearGradient
+                          colors={theme.fabGradient}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                          style={styles.syncButtonGradient}
+                        >
+                          <Text style={styles.syncButtonText}>
+                            {syncStatus || "☁️ Sync Decks with Cloud"}
+                          </Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                      <Text style={[styles.syncHintText, { color: theme.textTertiary }]}>
+                        Keeps all saved portals backed up safely across device reinstalls.
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={[styles.signOutBtn, { borderColor: theme.dangerBorder, backgroundColor: theme.dangerGlass }]}
+                      onPress={() => {
+                        setProfileModal(false);
+                        onSignOut();
+                      }}
+                    >
+                      <Text style={[styles.signOutText, { color: theme.danger }]}>Sign Out</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+              </GlassSurface>
+            </Animated.View>
+          </Pressable>
+        </Modal>
+
         {/* Liquid Glass Add Site Bottom Sheet Modal */}
         <Modal
           visible={modalVisible}
@@ -716,7 +858,6 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
                 intensity={theme.blurIntensityHeavy}
                 style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16 }]}
               >
-                {/* Drag pill handle */}
                 <View style={styles.dragPillHandle}>
                   <View
                     style={[
@@ -743,10 +884,9 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
 
                 <Text style={[styles.modalDesc, { color: theme.textSecondary }]}>
                   Paste any web URL. We will automatically fetch its high-res icon and configure a
-                  custom liquid app view.
+                  custom liquid app view with zero stale caches.
                 </Text>
 
-                {/* Input Fields */}
                 <View
                   style={[
                     styles.glassInputWrap,
@@ -789,7 +929,6 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
                   />
                 </View>
 
-                {/* Action Buttons */}
                 <View style={styles.modalActionRow}>
                   <TouchableOpacity
                     style={[
@@ -834,16 +973,19 @@ function HomeScreen({ sites, theme, isDark, onToggleTheme, onOpen, onAdd, onDele
 }
 
 // ──────────────────────────────────────────────────────────────
-// Site Screen: Translucent Frosted VisionOS Header over WebView
+// Site Screen: Fresh Load, Persistent Cookies, Google OAuth Handling
 // ──────────────────────────────────────────────────────────────
-function SiteScreen({ site, theme, isDark, onBack }) {
+function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
   const webviewRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
   const [hasError, setHasError] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
-  const [reloadKey, setReloadKey] = useState(0);
+  const [reloadKey, setReloadKey] = useState(() => Date.now());
   const insets = useSafeAreaInsets();
+
+  // Force a fresh load timestamp on every open (bypasses browser and webview caches)
+  const freshUrl = `${site.url}${site.url.includes("?") ? "&" : "?"}_fresh_ts=${reloadKey}`;
 
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -860,18 +1002,48 @@ function SiteScreen({ site, theme, isDark, onBack }) {
   const retry = () => {
     setHasError(false);
     setLoading(true);
-    if (Platform.OS === "web") {
-      setReloadKey((k) => k + 1);
-    } else {
+    setReloadKey(Date.now());
+    if (Platform.OS !== "web") {
       webviewRef.current?.reload();
     }
+  };
+
+  /**
+   * Handle navigation requests:
+   * 1. Intercept Google OAuth/SSO flows to prevent Google's 403 disallowed_useragent error
+   * 2. Open external links or system browser when needed
+   */
+  const handleShouldStartLoad = (request) => {
+    const targetUrl = request.url;
+
+    // Check if URL is a Google / Apple / OAuth provider login endpoint
+    const isGoogleOAuth =
+      /accounts\.google\.com\/(signin|o\/oauth2|ServiceLogin)/i.test(targetUrl) ||
+      /appleid\.apple\.com\/auth/i.test(targetUrl) ||
+      /github\.com\/login\/oauth/i.test(targetUrl);
+
+    if (isGoogleOAuth) {
+      // Open in Custom Tabs / Safari so Google authentication succeeds without 403 block
+      (async () => {
+        try {
+          const authResult = await WebBrowser.openAuthSessionAsync(targetUrl, site.url);
+          if (authResult.type === "success" || authResult.type === "dismiss") {
+            // Once user logs in, reload the site in WebView to pick up the shared cookies
+            webviewRef.current?.reload();
+          }
+        } catch (e) {
+          Linking.openURL(targetUrl);
+        }
+      })();
+      return false; // Prevent embedded webview from navigating to blocked OAuth page
+    }
+
+    return isAllowed(targetUrl, site);
   };
 
   return (
     <View style={[styles.screenRoot, { backgroundColor: theme.background }]}>
       <StatusBar style={isDark ? "light" : "dark"} />
-
-      {/* Background blobs visible on borders or loading */}
       <DriftingBlobs theme={theme} />
 
       {/* Main WebView Content Area */}
@@ -917,7 +1089,7 @@ function SiteScreen({ site, theme, isDark, onBack }) {
         ) : Platform.OS === "web" ? (
           <iframe
             key={reloadKey}
-            src={site.url}
+            src={freshUrl}
             title={site.name}
             style={{
               flex: 1,
@@ -931,9 +1103,26 @@ function SiteScreen({ site, theme, isDark, onBack }) {
         ) : (
           <WebView
             ref={webviewRef}
-            source={{ uri: site.url }}
+            source={{
+              uri: freshUrl,
+              headers: {
+                "Cache-Control": "no-cache, no-store, must-revalidate",
+                Pragma: "no-cache",
+                Expires: "0",
+              },
+            }}
             style={[styles.webviewNative, { marginTop: insets.top + 64 }]}
             startInLoadingState={false}
+            // 1. Bypass Caches: Always load latest content
+            cacheEnabled={false}
+            cacheMode="LOAD_NO_CACHE"
+            // 2. Persistent Login: Keep cookies & storage intact
+            sharedCookiesEnabled
+            thirdPartyCookiesEnabled
+            domStorageEnabled
+            databaseEnabled
+            // 3. User-Agent setting for Android to avoid embedded webview block
+            userAgent={Platform.OS === "android" ? ANDROID_MOBILE_UA : undefined}
             onLoadStart={() => setLoading(true)}
             onLoadEnd={() => setLoading(false)}
             onLoadProgress={({ nativeEvent }) => setProgress(nativeEvent.progress)}
@@ -943,10 +1132,9 @@ function SiteScreen({ site, theme, isDark, onBack }) {
               setLoading(false);
             }}
             onHttpError={() => setLoading(false)}
-            onShouldStartLoadWithRequest={(request) => isAllowed(request.url, site)}
+            onShouldStartLoadWithRequest={handleShouldStartLoad}
             pullToRefreshEnabled={config.pullToRefresh}
             allowsBackForwardNavigationGestures
-            sharedCookiesEnabled
             decelerationRate="normal"
           />
         )}
@@ -980,7 +1168,7 @@ function SiteScreen({ site, theme, isDark, onBack }) {
               <Text style={[styles.siteHeaderBackText, { color: theme.textPrimary }]}>Decks</Text>
             </TouchableOpacity>
 
-            {/* Site Title and Host pill */}
+            {/* Site Title and Host chip */}
             <View style={styles.siteHeaderTitleContainer}>
               <Text style={[styles.siteHeaderTitle, { color: theme.textPrimary }]} numberOfLines={1}>
                 {site.name}
@@ -990,8 +1178,22 @@ function SiteScreen({ site, theme, isDark, onBack }) {
               </Text>
             </View>
 
-            {/* Right Action Controls: Refresh & External link */}
+            {/* Right Action Controls: Forget Login, Refresh, External link */}
             <View style={styles.siteHeaderActions}>
+              <TouchableOpacity
+                onPress={() => onForgetLogin(site, webviewRef)}
+                style={[
+                  styles.siteHeaderIconBtn,
+                  {
+                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                    borderColor: theme.glassBorder,
+                  },
+                ]}
+                accessibilityLabel="Forget Login / Clear Session"
+              >
+                <Text style={styles.siteHeaderActionIcon}>🔒</Text>
+              </TouchableOpacity>
+
               <TouchableOpacity
                 onPress={retry}
                 style={[
@@ -1001,7 +1203,7 @@ function SiteScreen({ site, theme, isDark, onBack }) {
                     borderColor: theme.glassBorder,
                   },
                 ]}
-                accessibilityLabel="Reload site"
+                accessibilityLabel="Force Reload"
               >
                 <Text style={[styles.siteHeaderActionText, { color: theme.textSecondary }]}>↻</Text>
               </TouchableOpacity>
@@ -1046,14 +1248,16 @@ export default function App() {
   const [sites, setSites] = useState([]);
   const [activeSite, setActiveSite] = useState(null);
   const [ready, setReady] = useState(false);
+  const [user, setUser] = useState(null);
 
   // Theme preference
   const systemScheme = useColorScheme();
-  const [themeMode, setThemeMode] = useState("auto"); // "auto" | "light" | "dark"
+  const [themeMode, setThemeMode] = useState("auto");
 
   const isDark = themeMode === "auto" ? systemScheme === "dark" : themeMode === "dark";
   const theme = isDark ? darkTheme : lightTheme;
 
+  // Initial load: saved sites, theme, and user session
   useEffect(() => {
     (async () => {
       try {
@@ -1062,8 +1266,19 @@ export default function App() {
 
         const savedTheme = await AsyncStorage.getItem(THEME_PREF_KEY);
         if (savedTheme) setThemeMode(savedTheme);
+
+        const storedUser = await authService.getStoredUser();
+        if (storedUser) {
+          setUser(storedUser);
+          // Auto-sync or restore from cloud
+          const cloudSites = await authService.fetchSitesFromCloud(storedUser);
+          if (cloudSites && cloudSites.length > 0 && (!rawSites || JSON.parse(rawSites).length === 0)) {
+            setSites(cloudSites);
+            await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(cloudSites));
+          }
+        }
       } catch (e) {
-        // start with clean defaults
+        // clean fallback
       } finally {
         setReady(true);
       }
@@ -1076,13 +1291,70 @@ export default function App() {
     AsyncStorage.setItem(THEME_PREF_KEY, next).catch(() => {});
   };
 
-  const persistSites = useCallback((next) => {
-    setSites(next);
-    AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
-  }, []);
+  const persistSites = useCallback(
+    (next) => {
+      setSites(next);
+      AsyncStorage.setItem(STORAGE_KEY, JSON.stringify(next)).catch(() => {});
+      if (user) {
+        authService.syncSitesToCloud(user, next).catch(() => {});
+      }
+    },
+    [user]
+  );
 
   const handleAdd = (site) => persistSites([site, ...sites]);
   const handleDelete = (id) => persistSites(sites.filter((s) => s.id !== id));
+
+  // In-app Google Sign-In handler
+  const handleSignIn = async () => {
+    try {
+      const profile = await authService.promptGoogleSignIn();
+      if (profile) {
+        setUser(profile);
+        // Sync existing sites to cloud
+        await authService.syncSitesToCloud(profile, sites);
+      }
+    } catch (err) {
+      console.warn("Sign-in notice:", err?.message);
+    }
+  };
+
+  const handleSignOut = async () => {
+    await authService.signOutUser();
+    setUser(null);
+  };
+
+  const handleSyncCloud = async () => {
+    if (!user) return false;
+    return await authService.syncSitesToCloud(user, sites);
+  };
+
+  // Forget Login / Clear Site Session handler
+  const handleForgetLogin = async (site, webviewRef = null) => {
+    const runClear = async () => {
+      await forgetSiteLogin(site.url, webviewRef);
+      if (Platform.OS === "web" && typeof window !== "undefined") {
+        window.alert(`Logged out from ${site.name}. Session cleared.`);
+      } else {
+        Alert.alert("Session Cleared", `Cookies and login session for ${site.name} have been cleared.`);
+      }
+    };
+
+    if (Platform.OS === "web") {
+      if (typeof window !== "undefined" && window.confirm(`Forget login for "${site.name}"? This clears your saved session cookies.`)) {
+        await runClear();
+      }
+    } else {
+      Alert.alert(
+        "Forget Login",
+        `Clear saved login cookies and storage for "${site.name}"?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Clear Session", style: "destructive", onPress: runClear },
+        ]
+      );
+    }
+  };
 
   if (!ready) {
     return (
@@ -1104,16 +1376,22 @@ export default function App() {
             theme={theme}
             isDark={isDark}
             onBack={() => setActiveSite(null)}
+            onForgetLogin={handleForgetLogin}
           />
         ) : (
           <HomeScreen
             sites={sites}
             theme={theme}
             isDark={isDark}
+            user={user}
+            onSignIn={handleSignIn}
+            onSignOut={handleSignOut}
+            onSyncCloud={handleSyncCloud}
             onToggleTheme={toggleTheme}
             onOpen={setActiveSite}
             onAdd={handleAdd}
             onDelete={handleDelete}
+            onForgetLogin={handleForgetLogin}
           />
         )}
       </Animated.View>
@@ -1167,7 +1445,7 @@ const styles = StyleSheet.create({
   },
   headerGlass: {
     paddingHorizontal: 18,
-    paddingVertical: 14,
+    paddingVertical: 12,
   },
   headerInner: {
     flexDirection: "row",
@@ -1200,25 +1478,86 @@ const styles = StyleSheet.create({
     left: 8,
   },
   headerTitleText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "800",
-    letterSpacing: -0.5,
+    letterSpacing: -0.4,
   },
   headerSubtitleText: {
     fontSize: 12,
     fontWeight: "500",
     marginTop: 1,
   },
+  headerRightGroup: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  userChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    marginRight: 8,
+  },
+  userAvatar: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    marginRight: 6,
+  },
+  userAvatarFallback: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 6,
+  },
+  userAvatarFallbackText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  userChipText: {
+    fontSize: 13,
+    fontWeight: "700",
+    maxWidth: 70,
+  },
+  googleSignInBtn: {
+    borderRadius: radii.pill,
+    overflow: "hidden",
+    borderWidth: 1,
+    marginRight: 8,
+  },
+  googleSignInGradient: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  googleIconText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "900",
+    marginRight: 5,
+  },
+  googleSignInText: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+  },
   themeToggle: {
-    width: 38,
-    height: 38,
+    width: 36,
+    height: 36,
     borderRadius: radii.pill,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
   },
   themeToggleIcon: {
-    fontSize: 16,
+    fontSize: 15,
   },
 
   // Tiles
@@ -1287,44 +1626,59 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   dotsButton: {
-    width: 34,
-    height: 34,
+    width: 36,
+    height: 36,
     borderRadius: radii.pill,
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 10,
+    marginLeft: 8,
   },
   dotsText: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: "800",
     letterSpacing: 1,
   },
-  confirmWrap: {
+
+  // Menu Modal
+  menuBackdrop: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: "rgba(0,0,0,0.5)",
+    padding: 24,
+  },
+  menuContainer: {
+    width: "100%",
+    maxWidth: 360,
+  },
+  menuGlass: {
+    padding: 20,
+  },
+  menuHeaderTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    marginBottom: 2,
+  },
+  menuHeaderSub: {
+    fontSize: 12,
+    marginBottom: 16,
+  },
+  menuItem: {
     flexDirection: "row",
     alignItems: "center",
-    marginLeft: 8,
+    paddingVertical: 12,
   },
-  confirmButton: {
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: radii.pill,
-    marginRight: 6,
+  menuItemIcon: {
+    fontSize: 20,
+    marginRight: 14,
   },
-  confirmText: {
-    color: "#fff",
-    fontSize: 12,
+  menuItemText: {
+    fontSize: 15,
     fontWeight: "700",
   },
-  cancelButton: {
-    width: 28,
-    height: 28,
-    borderRadius: radii.pill,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  cancelText: {
+  menuItemDesc: {
     fontSize: 11,
-    fontWeight: "700",
+    marginTop: 2,
   },
 
   // Floating Action Button
@@ -1412,6 +1766,76 @@ const styles = StyleSheet.create({
   },
   emptyBtnText: {
     color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+
+  // Profile Modal
+  profileModalBody: {
+    alignItems: "center",
+    paddingVertical: 8,
+  },
+  profileModalAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    marginBottom: 12,
+  },
+  profileModalAvatarFallback: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 12,
+  },
+  profileModalAvatarText: {
+    color: "#fff",
+    fontSize: 28,
+    fontWeight: "700",
+  },
+  profileModalName: {
+    fontSize: 20,
+    fontWeight: "800",
+    marginBottom: 2,
+  },
+  profileModalEmail: {
+    fontSize: 13,
+    marginBottom: 20,
+  },
+  cloudSyncBox: {
+    width: "100%",
+    marginBottom: 20,
+    alignItems: "center",
+  },
+  syncButton: {
+    borderRadius: radii.pill,
+    overflow: "hidden",
+    width: "100%",
+    marginBottom: 8,
+  },
+  syncButtonGradient: {
+    paddingVertical: 12,
+    alignItems: "center",
+    borderRadius: radii.pill,
+  },
+  syncButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  syncHintText: {
+    fontSize: 12,
+    textAlign: "center",
+    lineHeight: 16,
+  },
+  signOutBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 24,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+  },
+  signOutText: {
     fontSize: 14,
     fontWeight: "700",
   },
@@ -1591,6 +2015,9 @@ const styles = StyleSheet.create({
   siteHeaderActionText: {
     fontSize: 14,
     fontWeight: "700",
+  },
+  siteHeaderActionIcon: {
+    fontSize: 13,
   },
   progressTrack: {
     height: 3,
