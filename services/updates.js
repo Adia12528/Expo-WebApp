@@ -42,8 +42,23 @@ export async function checkAndDownloadUpdate({ silent = false } = {}) {
     }
   } catch (error) {
     console.warn("[Updates] Failed to check/fetch updates:", error?.message);
+    const msg = error?.message || "";
+    // When no new update has been published to EAS yet, EAS returns 404 / Failed to download remote update
+    const isNoUpdateAvailable =
+      msg.includes("Failed to download remote update") ||
+      msg.includes("404") ||
+      msg.includes("no updates available") ||
+      msg.includes("no channel");
+
+    if (isNoUpdateAvailable) {
+      if (!silent) {
+        Alert.alert("Up to Date ✨", "You are already using the latest version of My Sites.");
+      }
+      return false;
+    }
+
     if (!silent) {
-      Alert.alert("Update Notice", `Could not check for updates: ${error?.message || "Network error"}`);
+      Alert.alert("Update Notice", `Could not check for updates: ${msg || "Network error"}`);
     }
     return false;
   }
