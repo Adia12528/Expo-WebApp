@@ -19,6 +19,7 @@ import {
   Share,
   ScrollView,
   Clipboard,
+  AppState,
 } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context";
@@ -45,6 +46,7 @@ import config from "./config";
 import { lightTheme, darkTheme, radii } from "./theme";
 import { forgetSiteLogin } from "./services/cookies";
 import authService from "./services/auth";
+import updatesService from "./services/updates";
 
 // Complete any active web auth session
 WebBrowser.maybeCompleteAuthSession();
@@ -702,6 +704,9 @@ function HomeScreen({
   onDelete,
   onForgetLogin,
   onPin,
+  updateReady,
+  onCheckUpdates,
+  onRestartApp,
 }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [profileModal, setProfileModal] = useState(false);
@@ -925,6 +930,39 @@ function HomeScreen({
           </GlassSurface>
         </View>
 
+        {/* OTA Update Ready Notification Banner */}
+        {updateReady && (
+          <View style={styles.updateBannerPad}>
+            <GlassSurface theme={theme} radius={radii.pill} style={styles.updateBannerGlass}>
+              <View style={styles.updateBannerRow}>
+                <Text style={styles.updateBannerIcon}>🚀</Text>
+                <View style={styles.updateBannerTextWrap}>
+                  <Text style={[styles.updateBannerTitle, { color: theme.textPrimary }]}>
+                    New Update Downloaded!
+                  </Text>
+                  <Text style={[styles.updateBannerSub, { color: theme.textSecondary }]}>
+                    Restart to apply changes now.
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={[styles.updateBannerBtn, theme.glowShadow]}
+                  onPress={onRestartApp}
+                  activeOpacity={0.85}
+                >
+                  <LinearGradient
+                    colors={theme.fabGradient}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.updateBannerBtnGradient}
+                  >
+                    <Text style={styles.updateBannerBtnText}>Restart</Text>
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </GlassSurface>
+          </View>
+        )}
+
         {/* Category Horizontal Pills */}
         <View style={styles.categoryBarPad}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryBarContent}>
@@ -1143,6 +1181,30 @@ function HomeScreen({
                       </TouchableOpacity>
                       <Text style={[styles.syncHintText, { color: theme.textTertiary }]}>
                         Keeps all saved portals backed up safely across device reinstalls.
+                      </Text>
+                    </View>
+
+                    {/* App Updates Section */}
+                    <View style={styles.cloudSyncBox}>
+                      <TouchableOpacity
+                        style={[
+                          styles.syncButton,
+                          {
+                            borderColor: theme.glassBorder,
+                            backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                          },
+                        ]}
+                        onPress={() => {
+                          setProfileModal(false);
+                          onCheckUpdates();
+                        }}
+                      >
+                        <Text style={[styles.syncButtonText, { color: theme.textPrimary, paddingVertical: 12 }]}>
+                          🔄 Check for App Updates
+                        </Text>
+                      </TouchableOpacity>
+                      <Text style={[styles.syncHintText, { color: theme.textTertiary }]}>
+                        Instantly checks for new live features and OTA bug fixes.
                       </Text>
                     </View>
 
@@ -1714,6 +1776,7 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [isLocked, setIsLocked] = useState(false);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
+  const [updateReady, setUpdateReady] = useState(false);
 
   // Theme preference
   const systemScheme = useColorScheme();
@@ -1765,6 +1828,44 @@ export default function App() {
       }
     })();
   }, []);
+
+  // Background auto-check for OTA updates on launch and resume
+  useEffect(() => {
+    let mounted = true;
+    const checkUpdates = async () => {
+      const downloaded = await updatesService.checkAndDownloadUpdate({ silent: true });
+      if (mounted && downloaded) {
+        setUpdateReady(true);
+      }
+    };
+
+    // Delay initial check slightly so app startup is buttery smooth
+    const timer = setTimeout(checkUpdates, 2500);
+
+    // Also check when app comes to foreground
+    const sub = AppState.addEventListener("change", (nextState) => {
+      if (nextState === "active") {
+        checkUpdates();
+      }
+    });
+
+    return () => {
+      mounted = false;
+      clearTimeout(timer);
+      sub.remove();
+    };
+  }, []);
+
+  const handleCheckUpdates = async () => {
+    const downloaded = await updatesService.checkAndDownloadUpdate({ silent: false });
+    if (downloaded) {
+      setUpdateReady(true);
+    }
+  };
+
+  const handleRestartApp = () => {
+    updatesService.promptRestartPermission();
+  };
 
   const toggleTheme = () => {
     const next = isDark ? "light" : "dark";
@@ -1973,6 +2074,9 @@ export default function App() {
             onDelete={handleDelete}
             onForgetLogin={handleForgetLogin}
             onPin={handlePin}
+            updateReady={updateReady}
+            onCheckUpdates={handleCheckUpdates}
+            onRestartApp={handleRestartApp}
           />
         )}
       </Animated.View>
@@ -2990,6 +3094,52 @@ const styles = StyleSheet.create({
   unlockBtnText: {
     color: "#fff",
     fontSize: 15,
+    fontWeight: "700",
+  },
+
+  // OTA Update Banner Styles
+  updateBannerPad: {
+    paddingHorizontal: 16,
+    paddingTop: 4,
+    paddingBottom: 6,
+  },
+  updateBannerGlass: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  updateBannerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  updateBannerIcon: {
+    fontSize: 22,
+    marginRight: 10,
+  },
+  updateBannerTextWrap: {
+    flex: 1,
+  },
+  updateBannerTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  updateBannerSub: {
+    fontSize: 11,
+    marginTop: 1,
+  },
+  updateBannerBtn: {
+    borderRadius: radii.pill,
+    overflow: "hidden",
+    marginLeft: 10,
+  },
+  updateBannerBtnGradient: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  updateBannerBtnText: {
+    color: "#fff",
+    fontSize: 12,
     fontWeight: "700",
   },
 });
