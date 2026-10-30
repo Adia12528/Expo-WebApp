@@ -46,7 +46,7 @@ export default {
   // Requires https://auth.expo.io/@adisoni.01/website-to-app to be an
   // authorized redirect URI in your GCP Web client.
   // Set to false (or leave out) when using an Android OAuth client (Option A).
-  useExpoProxy: true,
+  useExpoProxy: false,
 
   // Custom Redirect URI override (optional).
   // Leave null to auto-generate from useExpoProxy / scheme settings above.
