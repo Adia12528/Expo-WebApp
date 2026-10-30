@@ -20,15 +20,35 @@ export const googleDiscovery = {
 export let IS_DEMO_AUTH = false;
 
 /**
- * Get the current redirect URI for Expo AuthSession
+ * Get the current redirect URI for Expo AuthSession.
+ *
+ * Strategy (in priority order):
+ *  1. config.googleRedirectUri  — hard-coded override (manual config)
+ *  2. EXPO_PROXY                — Expo Auth Proxy (used when config.useExpoProxy = true)
+ *                                 Requires the URI to be registered in GCP as an
+ *                                 "Authorized redirect URI" for your Web client.
+ *  3. Native scheme             — com.adityasoni.mysites:/ (requires Android OAuth client
+ *                                 in GCP, NOT a web client)
  */
 export function getRedirectUri() {
   if (config.googleRedirectUri) {
     return config.googleRedirectUri;
   }
+
+  // Expo Auth Proxy — works with a Web OAuth client.
+  // Register https://auth.expo.io/@adisoni.01/website-to-app in GCP → Web client →
+  // Authorized redirect URIs, then set useExpoProxy: true in config.js.
+  if (config.useExpoProxy) {
+    return AuthSession.makeRedirectUri({
+      useProxy: true,
+    });
+  }
+
+  // Native scheme — works with an Android OAuth client (not web client).
+  // Create an Android client in GCP with package com.adityasoni.mysites and the debug SHA-1.
   return AuthSession.makeRedirectUri({
+    native: "com.adityasoni.mysites:/",
     scheme: "com.adityasoni.mysites",
-    preferLocalhost: true,
   });
 }
 

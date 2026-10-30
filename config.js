@@ -23,22 +23,32 @@ export default {
   // ──────────────────────────────────────────────────────────────
   // Google OAuth Client ID for real Google Sign-In
   // ──────────────────────────────────────────────────────────────
-  // HOW TO SET UP:
-  //   1. Go to https://console.cloud.google.com/
-  //   2. Create a project (or select an existing one)
-  //   3. Enable "Google People API" under APIs & Services
-  //   4. Go to APIs & Services → Credentials → Create Credentials → OAuth 2.0 Client ID
-  //   5. For mobile (Expo):
-  //      - Application type: "iOS" for iOS / "Android" for Android
-  //      - Use the Expo redirect URI: AuthSession.makeRedirectUri({ scheme: "website-to-app" })
-  //      - For development/Expo Go: select "Expo" as the redirect URI scheme
-  //   6. Copy the generated Client ID and paste it below (replace null)
   //
-  // If left as null, the app will use a friendly demo/offline profile
-  // so you can test the full UI without any OAuth configuration.
+  // ── OPTION A: Android OAuth Client (Recommended for production) ──
+  //   1. GCP Console → APIs & Services → Credentials
+  //   2. + Create Credentials → OAuth 2.0 Client ID → Application type: Android
+  //   3. Package name: com.adityasoni.mysites
+  //   4. SHA-1: 5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25
+  //   5. Paste the resulting client ID below.
+  //   6. Set useExpoProxy: false (or remove it)
+  //
+  // ── OPTION B: Web OAuth Client + Expo Auth Proxy (Quick dev fix) ──
+  //   1. GCP Console → Edit your existing Web client (747564924273-...)
+  //   2. Under "Authorized redirect URIs" add:
+  //        https://auth.expo.io/@adisoni.01/website-to-app
+  //   3. Keep the existing client ID below (Web type is fine for proxy).
+  //   4. Set useExpoProxy: true
+  //
+  // If googleClientId is null, a friendly demo/offline profile is used.
   googleClientId: "747564924273-p5c38vam6o8ks3rnuekqh9pu9amltjpu.apps.googleusercontent.com",
 
+  // Set to true to use the Expo Auth Proxy (Option B above).
+  // Requires https://auth.expo.io/@adisoni.01/website-to-app to be an
+  // authorized redirect URI in your GCP Web client.
+  // Set to false (or leave out) when using an Android OAuth client (Option A).
+  useExpoProxy: true,
+
   // Custom Redirect URI override (optional).
-  // Leave null to automatically generate: "com.adityasoni.mysites:/" for Android builds.
+  // Leave null to auto-generate from useExpoProxy / scheme settings above.
   googleRedirectUri: null,
 };
