@@ -99,8 +99,26 @@ export async function forgetSiteLogin(url, webviewRef = null) {
   return true;
 }
 
+/**
+ * Persist cookies to native disk storage immediately.
+ * Ensures session cookies and auth tokens aren't lost if the app
+ * is closed or backgrounded.
+ */
+export async function flushCookies() {
+  if (CookieManager && Platform.OS !== "web") {
+    try {
+      if (typeof CookieManager.flush === "function") {
+        await CookieManager.flush();
+      }
+    } catch (e) {
+      console.warn("[Cookies] Flush error:", e?.message);
+    }
+  }
+}
+
 export default {
   getCookiesForSite,
   forgetSiteLogin,
   getDomainFromUrl,
+  flushCookies,
 };

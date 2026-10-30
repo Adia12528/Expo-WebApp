@@ -44,7 +44,7 @@ import Animated, {
 import Svg, { Circle, Defs, RadialGradient, Stop } from "react-native-svg";
 import config from "./config";
 import { lightTheme, darkTheme, radii } from "./theme";
-import { forgetSiteLogin } from "./services/cookies";
+import { forgetSiteLogin, flushCookies } from "./services/cookies";
 import authService from "./services/auth";
 import updatesService from "./services/updates";
 
@@ -1399,10 +1399,10 @@ function HomeScreen({
 }
 
 // ──────────────────────────────────────────────────────────────
-// Site Screen: Fresh Load, Persistent Cookies, Progress Bar,
-//              Google OAuth Handling
+// Site Screen: Persistent Logins & Cookies, Progress Bar,
+//              OAuth Auto-Assist & Google Sign-In
 // ──────────────────────────────────────────────────────────────
-function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
+function SiteScreen({ site, theme, isDark, user, onBack, onForgetLogin }) {
   const webviewRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
@@ -1411,6 +1411,9 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
   const [reloadKey, setReloadKey] = useState(() => Date.now());
   const [isDesktop, setIsDesktop] = useState(false);
   const [adBlockEnabled, setAdBlockEnabled] = useState(true);
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [loginPromptDismissed, setLoginPromptDismissed] = useState(false);
+  const [detectedGoogleBtn, setDetectedGoogleBtn] = useState(false);
   const insets = useSafeAreaInsets();
 
   // Animated progress bar width (smooth transitions instead of abrupt jumps)
@@ -1426,8 +1429,8 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
     });
   }, [progress, progressAnim]);
 
-  // Force a fresh load timestamp on every open (bypasses browser and webview caches)
-  const freshUrl = `${site.url}${site.url.includes("?") ? "&" : "?"}_fresh_ts=${reloadKey}`;
+  // Clean, persistent URL: preserve session tokens and avoid URL query-param resets
+  const targetUrl = site.url;
 
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
@@ -1435,10 +1438,14 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
         webviewRef.current.goBack();
         return true;
       }
+      flushCookies();
       onBack();
       return true;
     });
-    return () => sub.remove();
+    return () => {
+      sub.remove();
+      flushCookies();
+    };
   }, [canGoBack, onBack]);
 
   const retry = () => {
@@ -1451,17 +1458,68 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
   };
 
   /**
+   * Autofill user's logged-in account email directly into website login fields
+   */
+  const fillUserEmail = () => {
+    if (!user?.email || !webviewRef.current) return;
+    const script = `
+      (function() {
+        try {
+          var email = ${JSON.stringify(user.email)};
+          var field = document.querySelector('input[type="email"], input[name*="email" i], input[autocomplete="email" i], input[name*="user" i], input[name*="login" i]');
+          if (field) {
+            field.focus();
+            field.value = email;
+            field.dispatchEvent(new Event('input', { bubbles: true }));
+            field.dispatchEvent(new Event('change', { bubbles: true }));
+            var pwd = document.querySelector('input[type="password"]');
+            if (pwd) {
+              pwd.focus();
+            }
+          }
+        } catch(e) {}
+      })();
+      true;
+    `;
+    webviewRef.current.injectJavaScript(script);
+    setShowLoginPrompt(false);
+    setLoginPromptDismissed(true);
+  };
+
+  /**
+   * If the webpage has a 'Sign in with Google' button, trigger it with auto-login hint
+   */
+  const triggerGoogleLogin = () => {
+    if (!webviewRef.current) return;
+    const script = `
+      (function() {
+        try {
+          var googleBtn = document.querySelector('button[aria-label*="Google" i], a[href*="accounts.google.com"], [data-provider="google"]');
+          if (googleBtn) {
+            googleBtn.click();
+          }
+        } catch(e) {}
+      })();
+      true;
+    `;
+    webviewRef.current.injectJavaScript(script);
+    setShowLoginPrompt(false);
+    setLoginPromptDismissed(true);
+  };
+
+  /**
    * Handle navigation requests:
    * 1. Intercept Google OAuth/SSO flows to prevent Google's 403 disallowed_useragent error
-   * 2. Open external links or system browser when needed
+   * 2. Direct login hint: passes user's app email to Google so user doesn't need to retype or choose
+   * 3. Open external links or system browser when needed
    */
   const handleShouldStartLoad = (request) => {
-    const targetUrl = request.url;
+    const navUrl = request.url;
 
     // Built-in Ad & Tracker Blocker
     if (adBlockEnabled) {
       try {
-        const host = new URL(targetUrl).hostname.toLowerCase();
+        const host = new URL(navUrl).hostname.toLowerCase();
         if (AD_BLOCK_DOMAINS.some((d) => host.includes(d))) {
           return false; // Silently drop ad/tracking requests
         }
@@ -1470,27 +1528,34 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
 
     // Check if URL is a Google / Apple / OAuth provider login endpoint
     const isGoogleOAuth =
-      /accounts\.google\.com\/(signin|o\/oauth2|ServiceLogin)/i.test(targetUrl) ||
-      /appleid\.apple\.com\/auth/i.test(targetUrl) ||
-      /github\.com\/login\/oauth/i.test(targetUrl);
+      /accounts\.google\.com\/(signin|o\/oauth2|ServiceLogin)/i.test(navUrl) ||
+      /appleid\.apple\.com\/auth/i.test(navUrl) ||
+      /github\.com\/login\/oauth/i.test(navUrl);
 
     if (isGoogleOAuth) {
+      let oauthUrl = navUrl;
+      // If user has signed into the app, directly pass login_hint so Google picks their account seamlessly
+      if (user?.email && /accounts\.google\.com/i.test(navUrl) && !navUrl.includes("login_hint=")) {
+        oauthUrl += (oauthUrl.includes("?") ? "&" : "?") + `login_hint=${encodeURIComponent(user.email)}`;
+      }
+
       // Open in Custom Tabs / Safari so Google authentication succeeds without 403 block
       (async () => {
         try {
-          const authResult = await WebBrowser.openAuthSessionAsync(targetUrl, site.url);
+          const authResult = await WebBrowser.openAuthSessionAsync(oauthUrl, site.url);
           if (authResult.type === "success" || authResult.type === "dismiss") {
-            // Once user logs in, reload the site in WebView to pick up the shared cookies
+            // Once user logs in, flush cookies to disk and reload the site to pick up the session
+            await flushCookies();
             webviewRef.current?.reload();
           }
         } catch (e) {
-          Linking.openURL(targetUrl);
+          Linking.openURL(oauthUrl);
         }
       })();
       return false; // Prevent embedded webview from navigating to blocked OAuth page
     }
 
-    return isAllowed(targetUrl, site);
+    return isAllowed(navUrl, site);
   };
 
   return (
@@ -1541,7 +1606,7 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
         ) : Platform.OS === "web" ? (
           <iframe
             key={reloadKey}
-            src={freshUrl}
+            src={targetUrl}
             title={site.name}
             style={{
               flex: 1,
@@ -1555,25 +1620,19 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
         ) : (
           <WebView
             ref={webviewRef}
-            source={{
-              uri: freshUrl,
-              headers: {
-                "Cache-Control": "no-cache, no-store, must-revalidate",
-                Pragma: "no-cache",
-                Expires: "0",
-              },
-            }}
+            key={reloadKey}
+            source={{ uri: targetUrl }}
             style={[styles.webviewNative, { marginTop: insets.top + 64 }]}
             startInLoadingState={false}
-            // 1. Bypass Caches: Always load latest content
-            cacheEnabled={false}
-            cacheMode="LOAD_NO_CACHE"
-            // 2. Persistent Login: Keep cookies & storage intact
+            // 1. Persistent Login: Keep cookies, local storage & session state intact
+            cacheEnabled={true}
+            cacheMode="LOAD_DEFAULT"
             sharedCookiesEnabled
             thirdPartyCookiesEnabled
             domStorageEnabled
             databaseEnabled
-            // 3. User-Agent setting for Android to avoid embedded webview block
+            saveFormDataDisabled={false}
+            // 2. User-Agent setting for Android to avoid embedded webview block
             userAgent={isDesktop ? DESKTOP_UA : (Platform.OS === "android" ? ANDROID_MOBILE_UA : undefined)}
             injectedJavaScript={`
               (function() {
@@ -1584,14 +1643,45 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
                     style.textContent = '@media (prefers-color-scheme: light) { html, body { background-color: #0d1117 !important; color: #e6edf3 !important; } }';
                     document.head.appendChild(style);
                   }
+
+                  // Scan page for login / email fields or Google Sign-In buttons
+                  function scanLoginFields() {
+                    var emailField = document.querySelector('input[type="email"], input[name*="email" i], input[autocomplete="email" i], input[name*="user" i], input[name*="login" i]');
+                    var googleBtn = document.querySelector('button[aria-label*="Google" i], a[href*="accounts.google.com"], [data-provider="google"]');
+                    if ((emailField || googleBtn) && window.ReactNativeWebView) {
+                      window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: 'LOGIN_FIELD_DETECTED',
+                        hasEmail: !!emailField,
+                        hasGoogle: !!googleBtn
+                      }));
+                    }
+                  }
+                  scanLoginFields();
+                  setTimeout(scanLoginFields, 1200);
+                  setTimeout(scanLoginFields, 2500);
                 } catch(e) {}
               })();
               true;
             `}
+            onMessage={(event) => {
+              try {
+                const data = JSON.parse(event.nativeEvent.data);
+                if (data.type === 'LOGIN_FIELD_DETECTED' && user?.email && !loginPromptDismissed) {
+                  setShowLoginPrompt(true);
+                  if (data.hasGoogle) setDetectedGoogleBtn(true);
+                }
+              } catch (e) {}
+            }}
             onLoadStart={() => setLoading(true)}
-            onLoadEnd={() => setLoading(false)}
+            onLoadEnd={() => {
+              setLoading(false);
+              flushCookies();
+            }}
             onLoadProgress={({ nativeEvent }) => setProgress(nativeEvent.progress)}
-            onNavigationStateChange={(navState) => setCanGoBack(navState.canGoBack)}
+            onNavigationStateChange={(navState) => {
+              setCanGoBack(navState.canGoBack);
+              flushCookies();
+            }}
             onError={() => {
               setHasError(true);
               setLoading(false);
@@ -1607,6 +1697,71 @@ function SiteScreen({ site, theme, isDark, onBack, onForgetLogin }) {
 
       {/* Frosted Shimmer Loading State */}
       {loading && !hasError && <GlassShimmer theme={theme} />}
+
+      {/* Quick Login Auto-Assist Pill */}
+      {showLoginPrompt && user?.email && !loginPromptDismissed && (
+        <Animated.View
+          entering={SlideInDown.duration(280)}
+          exiting={SlideOutDown.duration(200)}
+          style={[
+            styles.quickLoginBanner,
+            {
+              top: insets.top + 74,
+              backgroundColor: theme.isDark ? "rgba(15, 23, 42, 0.94)" : "rgba(255, 255, 255, 0.96)",
+              borderColor: theme.accent,
+            },
+          ]}
+        >
+          <View style={styles.quickLoginLeft}>
+            <Text style={styles.quickLoginIcon}>⚡</Text>
+            <View style={styles.quickLoginTextCol}>
+              <Text style={[styles.quickLoginTitle, { color: theme.textPrimary }]}>
+                Sign in with app account?
+              </Text>
+              <Text style={[styles.quickLoginEmail, { color: theme.accent }]} numberOfLines={1}>
+                {user.email}
+              </Text>
+            </View>
+          </View>
+
+          <View style={styles.quickLoginActions}>
+            {detectedGoogleBtn && (
+              <TouchableOpacity
+                style={[
+                  styles.quickLoginBtn,
+                  {
+                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.06)",
+                    borderColor: theme.glassBorder,
+                    borderWidth: 1,
+                  },
+                ]}
+                onPress={triggerGoogleLogin}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.quickLoginBtnText, { color: theme.textPrimary }]}>Google</Text>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={[styles.quickLoginBtn, { backgroundColor: theme.accent }]}
+              onPress={fillUserEmail}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.quickLoginBtnText}>Auto-Fill</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.quickLoginCloseBtn}
+              onPress={() => {
+                setShowLoginPrompt(false);
+                setLoginPromptDismissed(true);
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={[styles.quickLoginCloseText, { color: theme.textSecondary }]}>✕</Text>
+            </TouchableOpacity>
+          </View>
+        </Animated.View>
+      )}
 
       {/* Floating Translucent Liquid Glass Header */}
       <View style={[styles.siteFloatingHeaderWrap, { top: insets.top + 8 }]}>
@@ -2054,7 +2209,11 @@ export default function App() {
             site={activeSite}
             theme={theme}
             isDark={isDark}
-            onBack={() => setActiveSite(null)}
+            user={user}
+            onBack={() => {
+              flushCookies();
+              setActiveSite(null);
+            }}
             onForgetLogin={handleForgetLogin}
           />
         ) : (
@@ -3141,5 +3300,69 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 12,
     fontWeight: "700",
+  },
+
+  // Quick Login Auto-Assist Banner in WebView
+  quickLoginBanner: {
+    position: "absolute",
+    left: 14,
+    right: 14,
+    zIndex: 998,
+    borderRadius: radii.xl,
+    borderWidth: 1,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  quickLoginLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    marginRight: 10,
+  },
+  quickLoginIcon: {
+    fontSize: 20,
+    marginRight: 10,
+  },
+  quickLoginTextCol: {
+    flex: 1,
+  },
+  quickLoginTitle: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  quickLoginEmail: {
+    fontSize: 11,
+    fontWeight: "600",
+    marginTop: 1,
+  },
+  quickLoginActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  quickLoginBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: radii.md,
+  },
+  quickLoginBtnText: {
+    color: "#FFFFFF",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  quickLoginCloseBtn: {
+    padding: 6,
+  },
+  quickLoginCloseText: {
+    fontSize: 14,
+    fontWeight: "600",
   },
 });
