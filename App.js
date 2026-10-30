@@ -448,13 +448,25 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
     <Animated.View style={[styles.tileOuter, animatedStyle]}>
       <Pressable
         onPress={() => onOpen(item)}
+        onLongPress={() => setShowMenu(true)}
+        delayLongPress={320}
         onPressIn={handlePressIn}
         onPressOut={handlePressOut}
         style={styles.tilePressable}
       >
-        <GlassSurface theme={theme} radius={radii.lg} style={styles.tileGlass}>
+        <GlassSurface
+          theme={theme}
+          radius={radii.xl}
+          style={[
+            styles.tileGlass,
+            item.pinned && {
+              borderColor: theme.isDark ? "rgba(56, 189, 248, 0.45)" : "rgba(37, 99, 235, 0.45)",
+              borderWidth: 1.2,
+            },
+          ]}
+        >
           <View style={styles.tileRow}>
-            {/* Favicon */}
+            {/* Favicon with VisionOS squircle badge */}
             <GlassFavicon url={item.url} name={item.name} theme={theme} />
 
             {/* Info */}
@@ -464,7 +476,9 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
                   {item.name}
                 </Text>
                 {item.pinned && (
-                  <Text style={styles.tilePinBadge}>⭐</Text>
+                  <View style={[styles.pinnedBadgeWrap, { backgroundColor: theme.accentGlow }]}>
+                    <Text style={[styles.pinnedBadgeText, { color: theme.accent }]}>Pinned</Text>
+                  </View>
                 )}
               </View>
               <View style={styles.domainChipRow}>
@@ -487,6 +501,11 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
                   {timeAgo ? timeAgo : ""}
                 </Text>
               )}
+            </View>
+
+            {/* Quick Open Chevron */}
+            <View style={styles.tileChevronWrap}>
+              <Text style={[styles.tileChevron, { color: theme.textTertiary }]}>›</Text>
             </View>
 
             {/* Actions Menu Trigger */}
@@ -2322,14 +2341,14 @@ const styles = StyleSheet.create({
     left: 8,
   },
   headerTitleText: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: "800",
-    letterSpacing: -0.4,
+    letterSpacing: -0.5,
   },
   headerSubtitleText: {
     fontSize: 12,
     fontWeight: "500",
-    marginTop: 1,
+    marginTop: 1.5,
   },
   headerRightGroup: {
     flexDirection: "row",
@@ -2410,20 +2429,20 @@ const styles = StyleSheet.create({
     paddingBottom: 6,
   },
   searchBarGlass: {
-    paddingHorizontal: 14,
-    paddingVertical: 10,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
   },
   searchBarRow: {
     flexDirection: "row",
     alignItems: "center",
   },
   searchBarIcon: {
-    fontSize: 15,
-    marginRight: 8,
+    fontSize: 16,
+    marginRight: 10,
   },
   searchBarInput: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 14.5,
     fontWeight: "500",
   },
   searchClearIcon: {
@@ -2489,10 +2508,10 @@ const styles = StyleSheet.create({
     paddingRight: 8,
   },
   recentPillOuter: {
-    marginRight: 8,
+    marginRight: 9,
   },
   recentPillGlass: {
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
     paddingVertical: 8,
   },
   recentPillRow: {
@@ -2500,16 +2519,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   recentPillFavicon: {
-    width: 18,
-    height: 18,
-    borderRadius: 4,
-    marginRight: 6,
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    marginRight: 8,
   },
   recentPillFaviconFallback: {
-    width: 18,
-    height: 18,
-    borderRadius: 4,
-    marginRight: 6,
+    width: 20,
+    height: 20,
+    borderRadius: 6,
+    marginRight: 8,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -2533,7 +2552,7 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   tilePressable: {
-    borderRadius: radii.lg,
+    borderRadius: radii.xl,
   },
   tileGlass: {
     paddingHorizontal: 16,
@@ -2546,7 +2565,7 @@ const styles = StyleSheet.create({
   faviconBadge: {
     width: 48,
     height: 48,
-    borderRadius: radii.pill,
+    borderRadius: 14,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
@@ -2567,7 +2586,7 @@ const styles = StyleSheet.create({
   faviconFallbackText: {
     color: "#fff",
     fontSize: 18,
-    fontWeight: "700",
+    fontWeight: "800",
   },
   tileInfo: {
     flex: 1,
@@ -2578,30 +2597,47 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   tileName: {
-    fontSize: 16,
+    fontSize: 16.5,
     fontWeight: "700",
-    letterSpacing: -0.2,
+    letterSpacing: -0.3,
     flex: 1,
   },
-  tilePinBadge: {
-    fontSize: 13,
-    marginLeft: 4,
+  pinnedBadgeWrap: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radii.xs,
+    marginLeft: 6,
+  },
+  pinnedBadgeText: {
+    fontSize: 10,
+    fontWeight: "800",
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
   },
   domainChip: {
     alignSelf: "flex-start",
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: radii.sm,
+    paddingHorizontal: 9,
+    paddingVertical: 2.5,
+    borderRadius: radii.xs,
     marginTop: 4,
   },
   tileUrl: {
-    fontSize: 12,
-    fontWeight: "500",
+    fontSize: 11.5,
+    fontWeight: "600",
   },
   tileVisitLabel: {
     fontSize: 11,
     fontWeight: "500",
-    marginTop: 4,
+    marginTop: 3,
+  },
+  tileChevronWrap: {
+    paddingHorizontal: 4,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  tileChevron: {
+    fontSize: 22,
+    fontWeight: "300",
   },
   dotsButton: {
     width: 36,
@@ -2609,7 +2645,7 @@ const styles = StyleSheet.create({
     borderRadius: radii.pill,
     alignItems: "center",
     justifyContent: "center",
-    marginLeft: 8,
+    marginLeft: 4,
   },
   dotsText: {
     fontSize: 14,
@@ -3167,13 +3203,14 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   categoryPill: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
+    paddingHorizontal: 16,
+    paddingVertical: 7.5,
     borderRadius: radii.pill,
     borderWidth: 1,
   },
   categoryPillText: {
     fontSize: 13,
+    letterSpacing: -0.1,
   },
   domainChipRow: {
     flexDirection: "row",
@@ -3182,12 +3219,12 @@ const styles = StyleSheet.create({
     marginTop: 4,
   },
   categoryBadge: {
-    paddingHorizontal: 7,
+    paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: radii.sm,
+    borderRadius: radii.xs,
   },
   categoryBadgeText: {
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: "700",
   },
   modalCategorySection: {
