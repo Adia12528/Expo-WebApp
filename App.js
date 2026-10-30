@@ -1841,9 +1841,32 @@ export default function App() {
         setUser(profile);
         // Sync existing sites to cloud
         await authService.syncSitesToCloud(profile, sites);
+        if (profile.isDemo) {
+          Alert.alert(
+            "Signed In (Demo)",
+            "You are signed in as Demo User. Your deck will now sync locally."
+          );
+        } else {
+          Alert.alert("Signed In", `Welcome back, ${profile.name}!`);
+        }
       }
     } catch (err) {
-      console.warn("Sign-in notice:", err?.message);
+      console.error("Sign-in notice:", err?.message);
+      Alert.alert(
+        "Google Sign-In Notice",
+        `${err?.message || "Could not complete sign in."}\n\nWould you like to continue with a Demo profile instead?`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Use Demo Profile",
+            onPress: async () => {
+              const demo = authService.createDemoUser();
+              await AsyncStorage.setItem("app_user_profile_v1", JSON.stringify(demo));
+              setUser(demo);
+            },
+          },
+        ]
+      );
     }
   };
 

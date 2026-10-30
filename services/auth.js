@@ -1,7 +1,6 @@
 import * as WebBrowser from "expo-web-browser";
 import * as AuthSession from "expo-auth-session";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { Platform } from "react-native";
 import config from "../config";
 
 // Complete any pending auth sessions on web/mobile
@@ -11,27 +10,41 @@ const USER_STORAGE_KEY = "app_user_profile_v1";
 const CLOUD_SYNC_KEY_PREFIX = "cloud_sync_deck_";
 
 // Google OpenID Discovery Document
-const googleDiscovery = {
+export const googleDiscovery = {
   authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
   tokenEndpoint: "https://oauth2.googleapis.com/token",
   revocationEndpoint: "https://oauth2.googleapis.com/revoke",
   userInfoEndpoint: "https://www.googleapis.com/userinfo/v2/me",
 };
 
-/**
- * Whether the last sign-in was a demo/offline auth (no real OAuth).
- * Exported so UI can show a "(Demo)" badge if desired.
- */
 export let IS_DEMO_AUTH = false;
 
 /**
  * Get the current redirect URI for Expo AuthSession
  */
 export function getRedirectUri() {
+  if (config.googleRedirectUri) {
+    return config.googleRedirectUri;
+  }
   return AuthSession.makeRedirectUri({
-    scheme: "website-to-app",
+    scheme: "com.adityasoni.mysites",
     preferLocalhost: true,
   });
+}
+
+/**
+ * Creates a demo user object for offline testing
+ */
+export function createDemoUser() {
+  return {
+    id: "demo_user",
+    name: "Demo User",
+    email: "demo@mysites.app",
+    picture: null,
+    locale: "en",
+    signedInAt: new Date().toISOString(),
+    isDemo: true,
+  };
 }
 
 /**
@@ -39,7 +52,7 @@ export function getRedirectUri() {
  */
 export async function fetchGoogleUserProfile(accessToken) {
   try {
-    const response = await fetch("https://www.googleapis.com/userinfo/v2/me", {
+    const response = await fetch(googleDiscovery.userInfoEndpoint, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -49,12 +62,13 @@ export async function fetchGoogleUserProfile(accessToken) {
     }
     const data = await response.json();
     const profile = {
-      id: data.id,
+      id: data.id || data.sub,
       name: data.name || data.given_name || "Google User",
       email: data.email,
       picture: data.picture,
       locale: data.locale,
       signedInAt: new Date().toISOString(),
+      isDemo: false,
     };
     await AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(profile));
     return profile;
@@ -101,7 +115,6 @@ export async function syncSitesToCloud(user, sites) {
       lastSyncedAt: new Date().toISOString(),
       sites,
     };
-    // Persist to user-specific cloud backup store
     await AsyncStorage.setItem(
       `${CLOUD_SYNC_KEY_PREFIX}${user.id}`,
       JSON.stringify(syncPayload)
@@ -132,111 +145,89 @@ export async function fetchSitesFromCloud(user) {
 }
 
 /**
- * Start In-App Google Sign-in flow.
- *
- * Behaviour:
- *  1. If `config.googleClientId` is null/falsy → creates a demo offline profile
- *     and stores it locally so the rest of the app works without any OAuth setup.
- *     IS_DEMO_AUTH is set to true in this case.
- *
- *  2. If a real Client ID is configured → uses expo-auth-session's AuthSession.startAsync
- *     with PKCE (response_type=code) for a secure, standards-compliant flow.
- *     IS_DEMO_AUTH is set to false in this case.
- *
- * HOW TO CONFIGURE:
- *   Set `googleClientId` in config.js to your GCP OAuth 2.0 Client ID.
- *   See config.js for step-by-step instructions.
+ * Start In-App Google Sign-in flow using official AuthRequest & WebBrowser.
  */
 export async function promptGoogleSignIn() {
-  // ── 1. Check whether a real client ID is available ────────────────────────
-  const clientId = config.googleClientId;
+  const clientId = config.googleClientId?.trim();
 
+  // If no client ID configured in config.js, sign in with Demo profile
   if (!clientId) {
-    // ── DEMO / OFFLINE MODE ───────────────────────────────────────────────────
-    // No real OAuth client configured. Create a local mock profile so the
-    // app is fully functional for demo/testing purposes without crashing.
-    console.info(
-      "[Auth] No googleClientId configured in config.js. " +
-      "Using demo profile. Set config.googleClientId to enable real Google Sign-In."
-    );
-
-    const demoProfile = {
-      id: "demo_user",
-      name: "Demo User",
-      email: "demo@mysites.app",
-      picture: null,
-      locale: "en",
-      signedInAt: new Date().toISOString(),
-      isDemo: true,
-    };
-
+    console.info("[Auth] No googleClientId configured. Using demo profile.");
+    const demoProfile = createDemoUser();
     await AsyncStorage.setItem(USER_STORAGE_KEY, JSON.stringify(demoProfile));
     IS_DEMO_AUTH = true;
     return demoProfile;
   }
 
-  // ── 2. Real OAuth with PKCE (response_type=code) ──────────────────────────
   IS_DEMO_AUTH = false;
+  const redirectUri = getRedirectUri();
 
-  try {
-    const redirectUri = getRedirectUri();
+  console.log("[Auth] Starting Google OAuth flow...");
+  console.log("[Auth] Client ID:", clientId);
+  console.log("[Auth] Redirect URI:", redirectUri);
 
-    // Build PKCE code verifier + challenge
-    const codeChallenge = await AuthSession.generateHmac
-      ? undefined // fallback below
-      : undefined;
+  // 1. Prepare AuthRequest with PKCE
+  const request = new AuthSession.AuthRequest({
+    clientId,
+    redirectUri,
+    scopes: ["openid", "profile", "email"],
+    responseType: AuthSession.ResponseType.Code,
+    usePKCE: true,
+    extraParams: {
+      access_type: "offline",
+      prompt: "consent",
+    },
+  });
 
-    // Use AuthSession.startAsync for a standalone (non-hook) PKCE flow.
-    // This is compatible with Expo SDK 51 outside of hook context.
-    const result = await AuthSession.startAsync({
-      authUrl:
-        `${googleDiscovery.authorizationEndpoint}?` +
-        `client_id=${encodeURIComponent(clientId)}&` +
-        `redirect_uri=${encodeURIComponent(redirectUri)}&` +
-        `response_type=code&` +
-        `scope=${encodeURIComponent("openid profile email")}&` +
-        `code_challenge_method=S256&` +
-        `access_type=offline&` +
-        `prompt=consent`,
-      returnUrl: redirectUri,
-    });
+  // 2. Launch browser authentication prompt
+  const result = await request.promptAsync(googleDiscovery);
+  console.log("[Auth] Browser prompt result:", result);
 
-    if (result.type === "success" && result.params?.code) {
-      // Exchange authorization code for access token
-      const tokenResponse = await fetch(googleDiscovery.tokenEndpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          code: result.params.code,
-          client_id: clientId,
-          redirect_uri: redirectUri,
-          grant_type: "authorization_code",
-        }).toString(),
-      });
-
-      if (!tokenResponse.ok) {
-        const errText = await tokenResponse.text();
-        throw new Error(`Token exchange failed: ${tokenResponse.status} — ${errText}`);
-      }
-
-      const tokenData = await tokenResponse.json();
-
-      if (tokenData.access_token) {
-        return await fetchGoogleUserProfile(tokenData.access_token);
-      }
+  if (result.type === "success") {
+    // Check if access_token was returned directly
+    if (result.params?.access_token) {
+      return await fetchGoogleUserProfile(result.params.access_token);
     }
 
-    // User cancelled or flow returned without a code
+    // Exchange authorization code for access token via PKCE
+    if (result.params?.code) {
+      const tokenResponse = await AuthSession.exchangeCodeAsync(
+        {
+          clientId,
+          code: result.params.code,
+          redirectUri,
+          extraParams: request.codeVerifier
+            ? { code_verifier: request.codeVerifier }
+            : undefined,
+        },
+        googleDiscovery
+      );
+
+      if (tokenResponse?.accessToken) {
+        return await fetchGoogleUserProfile(tokenResponse.accessToken);
+      }
+      throw new Error("No access token received from Google token exchange.");
+    }
+
+    if (result.params?.error) {
+      throw new Error(`Google Error: ${result.params.error_description || result.params.error}`);
+    }
+  } else if (result.type === "cancel" || result.type === "dismiss") {
+    console.log("[Auth] User dismissed or cancelled authentication.");
     return null;
-  } catch (error) {
-    console.error("[Auth] promptGoogleSignIn error:", error);
-    throw error;
+  } else if (result.type === "locked") {
+    throw new Error("An authentication session is already active.");
+  } else {
+    throw new Error(`Authentication ended with status: ${result.type}`);
   }
+
+  return null;
 }
 
 export default {
   googleDiscovery,
   getRedirectUri,
+  createDemoUser,
   fetchGoogleUserProfile,
   getStoredUser,
   signOutUser,

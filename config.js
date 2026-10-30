@@ -37,4 +37,8 @@ export default {
   // If left as null, the app will use a friendly demo/offline profile
   // so you can test the full UI without any OAuth configuration.
   googleClientId: "747564924273-p5c38vam6o8ks3rnuekqh9pu9amltjpu.apps.googleusercontent.com",
+
+  // Custom Redirect URI override (optional).
+  // Leave null to automatically generate: "com.adityasoni.mysites:/" for Android builds.
+  googleRedirectUri: null,
 };
