@@ -98,5 +98,29 @@ export function promptRestartPermission() {
 export default {
   checkAndDownloadUpdate,
   promptRestartPermission,
+  getUpdateInfo,
 };
+
+/**
+ * Returns metadata about the current build and OTA update status.
+ */
+export function getUpdateInfo() {
+  try {
+    return {
+      isEnabled: Updates.isEnabled,
+      runtimeVersion: Updates.runtimeVersion || "1.0.0",
+      channel: Updates.channel || "preview",
+      updateId: Updates.updateId ? Updates.updateId.substring(0, 8) : "embedded",
+      createdAt: Updates.createdAt ? new Date(Updates.createdAt).toLocaleDateString() : null,
+      isEmbeddedLaunch: Updates.isEmbeddedLaunch,
+    };
+  } catch (e) {
+    return {
+      isEnabled: false,
+      runtimeVersion: "1.0.0",
+      channel: "preview",
+      updateId: "embedded",
+    };
+  }
+}
 

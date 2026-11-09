@@ -116,9 +116,32 @@ export async function flushCookies() {
   }
 }
 
+/**
+ * Wipe all cookies across the entire native app / all webviews
+ */
+export async function clearAllCookies() {
+  if (CookieManager && Platform.OS !== "web") {
+    try {
+      const isWebKit = Platform.OS === "ios";
+      if (typeof CookieManager.clearAll === "function") {
+        await CookieManager.clearAll(isWebKit);
+      }
+      if (typeof CookieManager.flush === "function") {
+        await CookieManager.flush();
+      }
+      return true;
+    } catch (e) {
+      console.warn("[Cookies] ClearAll error:", e?.message);
+      return false;
+    }
+  }
+  return true;
+}
+
 export default {
   getCookiesForSite,
   forgetSiteLogin,
   getDomainFromUrl,
   flushCookies,
+  clearAllCookies,
 };

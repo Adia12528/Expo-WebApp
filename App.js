@@ -44,9 +44,9 @@ import Animated, {
 import Svg, { Circle, Defs, RadialGradient, Stop } from "react-native-svg";
 import config from "./config";
 import { lightTheme, darkTheme, radii } from "./theme";
-import { forgetSiteLogin, flushCookies } from "./services/cookies";
+import { forgetSiteLogin, flushCookies, clearAllCookies } from "./services/cookies";
 import authService from "./services/auth";
-import updatesService from "./services/updates";
+import updatesService, { getUpdateInfo } from "./services/updates";
 
 // Complete any active web auth session
 WebBrowser.maybeCompleteAuthSession();
@@ -726,9 +726,15 @@ function HomeScreen({
   updateReady,
   onCheckUpdates,
   onRestartApp,
+  onImportSites,
+  onClearAllSessions,
 }) {
   const [modalVisible, setModalVisible] = useState(false);
   const [profileModal, setProfileModal] = useState(false);
+  const [settingsModal, setSettingsModal] = useState(false);
+  const [importModal, setImportModal] = useState(false);
+  const [importJsonText, setImportJsonText] = useState("");
+  const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [nameInput, setNameInput] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
@@ -736,6 +742,7 @@ function HomeScreen({
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [categoryInput, setCategoryInput] = useState("All");
   const insets = useSafeAreaInsets();
+  const updateInfo = getUpdateInfo();
 
   const resetForm = () => {
     setUrlInput("");
@@ -766,6 +773,50 @@ function HomeScreen({
     const ok = await onSyncCloud();
     setSyncStatus(ok ? "Synced ✓" : "Sync Failed");
     setTimeout(() => setSyncStatus(""), 2500);
+  };
+
+  const handleExportDecks = () => {
+    try {
+      const exportData = JSON.stringify(sites, null, 2);
+      Clipboard.setString(exportData);
+      Share.share({
+        title: "My Sites Backup",
+        message: exportData,
+      }).catch(() => {});
+      Alert.alert(
+        "Decks Exported! 📋",
+        `Copied ${sites.length} saved portals to your clipboard. You can also save or share this text backup.`
+      );
+    } catch (e) {
+      Alert.alert("Export Error", "Could not export sites.");
+    }
+  };
+
+  const handleImportDecks = () => {
+    try {
+      const parsed = JSON.parse(importJsonText.trim());
+      if (!Array.isArray(parsed) || parsed.length === 0) {
+        throw new Error("Invalid format: expected a list of sites.");
+      }
+      const valid = parsed.filter((s) => s.url && s.name).map((s) => ({
+        id: s.id || `${Date.now()}_${Math.random().toString(36).substr(2, 6)}`,
+        url: normalizeUrl(s.url) || s.url,
+        name: s.name,
+        category: s.category || "All",
+        pinned: !!s.pinned,
+        visitCount: s.visitCount || 0,
+        lastVisited: s.lastVisited || null,
+      }));
+      if (valid.length === 0) {
+        throw new Error("No valid sites found in the backup text.");
+      }
+      if (onImportSites) onImportSites(valid);
+      setImportModal(false);
+      setImportJsonText("");
+      Alert.alert("Import Successful! ✨", `Successfully restored ${valid.length} portals into your deck.`);
+    } catch (err) {
+      Alert.alert("Import Notice", `Could not parse backup JSON:\n${err.message || "Invalid JSON"}`);
+    }
   };
 
   // ── Search & Category filter ────────────────────────────────────
@@ -912,22 +963,22 @@ function HomeScreen({
                   </TouchableOpacity>
                 )}
 
+                {/* Settings & Updates Hub Button (⚙️) */}
                 <TouchableOpacity
-                  onPress={onToggleBiometric}
+                  onPress={() => setSettingsModal(true)}
                   style={[
                     styles.themeToggle,
                     {
-                      backgroundColor: biometricEnabled
-                        ? theme.accent
-                        : theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.05)",
-                      borderColor: biometricEnabled ? theme.accent : theme.glassBorder,
+                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.05)",
+                      borderColor: theme.glassBorder,
                       marginRight: 6,
                     },
                   ]}
                   hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                  accessibilityLabel="Toggle App Lock"
+                  accessibilityLabel="App Settings & Updates Hub"
                 >
-                  <Text style={styles.themeToggleIcon}>{biometricEnabled ? "🔒" : "🔓"}</Text>
+                  <Text style={styles.themeToggleIcon}>⚙️</Text>
+                  {updateReady && <View style={styles.updateBadgeDot} />}
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -1203,30 +1254,6 @@ function HomeScreen({
                       </Text>
                     </View>
 
-                    {/* App Updates Section */}
-                    <View style={styles.cloudSyncBox}>
-                      <TouchableOpacity
-                        style={[
-                          styles.syncButton,
-                          {
-                            borderColor: theme.glassBorder,
-                            backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-                          },
-                        ]}
-                        onPress={() => {
-                          setProfileModal(false);
-                          onCheckUpdates();
-                        }}
-                      >
-                        <Text style={[styles.syncButtonText, { color: theme.textPrimary, paddingVertical: 12 }]}>
-                          🔄 Check for App Updates
-                        </Text>
-                      </TouchableOpacity>
-                      <Text style={[styles.syncHintText, { color: theme.textTertiary }]}>
-                        Instantly checks for new live features and OTA bug fixes.
-                      </Text>
-                    </View>
-
                     <TouchableOpacity
                       style={[styles.signOutBtn, { borderColor: theme.dangerBorder, backgroundColor: theme.dangerGlass }]}
                       onPress={() => {
@@ -1241,6 +1268,354 @@ function HomeScreen({
               </GlassSurface>
             </Animated.View>
           </Pressable>
+        </Modal>
+
+        {/* ── Settings & Live Updates Hub Modal (⚙️) ── */}
+        <Modal
+          visible={settingsModal}
+          animationType="fade"
+          transparent
+          onRequestClose={() => setSettingsModal(false)}
+        >
+          <Pressable style={styles.modalBackdrop} onPress={() => setSettingsModal(false)}>
+            <Animated.View
+              entering={SlideInDown.springify().damping(18)}
+              style={styles.modalSheetWrap}
+            >
+              <GlassSurface
+                theme={theme}
+                radius={radii.xxl}
+                intensity={theme.blurIntensityHeavy}
+                style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16, maxHeight: SCREEN_HEIGHT * 0.88 }]}
+              >
+                <View style={styles.dragPillHandle}>
+                  <View style={[styles.dragPill, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
+                </View>
+
+                {/* Header Title Row */}
+                <View style={styles.settingsModalHeaderRow}>
+                  <Text style={[styles.settingsModalTitle, { color: theme.textPrimary }]}>
+                    Settings & System Hub
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.modalCloseCircle, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}
+                    onPress={() => setSettingsModal(false)}
+                  >
+                    <Text style={[styles.modalCloseText, { color: theme.textSecondary }]}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView showsVerticalScrollIndicator={false} style={styles.settingsScroll}>
+                  {/* ── 1. OTA Live Updates Hub ── */}
+                  <View style={styles.settingsSection}>
+                    <Text style={[styles.settingsSectionTitle, { color: theme.textSecondary }]}>
+                      LIVE APP UPDATES (OTA)
+                    </Text>
+                    <GlassSurface theme={theme} radius={radii.xl} style={styles.settingsCardGlass}>
+                      <View style={styles.settingsCardRow}>
+                        <View style={styles.settingsCardIconWrap}>
+                          <Text style={styles.settingsCardEmoji}>🚀</Text>
+                        </View>
+                        <View style={styles.settingsCardTextCol}>
+                          <View style={styles.settingsCardBadgeRow}>
+                            <Text style={[styles.settingsCardTitle, { color: theme.textPrimary }]}>
+                              Over-The-Air Update
+                            </Text>
+                            <View style={[styles.channelBadge, { backgroundColor: theme.accentGlow }]}>
+                              <Text style={[styles.channelBadgeText, { color: theme.accent }]}>
+                                {updateInfo.channel || "preview"}
+                              </Text>
+                            </View>
+                          </View>
+                          <Text style={[styles.settingsCardSub, { color: theme.textSecondary }]}>
+                            {updateReady
+                              ? "New version downloaded & ready to apply!"
+                              : `Version 1.0.0 • Runtime ${updateInfo.runtimeVersion || "1.0.0"}`}
+                          </Text>
+                        </View>
+                      </View>
+
+                      {updateReady ? (
+                        <TouchableOpacity
+                          style={[styles.settingsUpdateBtn, theme.glowShadow]}
+                          onPress={() => {
+                            setSettingsModal(false);
+                            onRestartApp();
+                          }}
+                          activeOpacity={0.85}
+                        >
+                          <LinearGradient
+                            colors={theme.fabGradient}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 0 }}
+                            style={styles.settingsUpdateBtnGradient}
+                          >
+                            <Text style={styles.settingsUpdateBtnText}>🚀 Restart & Apply Update</Text>
+                          </LinearGradient>
+                        </TouchableOpacity>
+                      ) : (
+                        <TouchableOpacity
+                          style={[
+                            styles.settingsUpdateBtn,
+                            {
+                              backgroundColor: theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
+                              borderColor: theme.glassBorder,
+                              borderWidth: 1,
+                            },
+                          ]}
+                          onPress={async () => {
+                            setIsCheckingUpdates(true);
+                            await onCheckUpdates();
+                            setIsCheckingUpdates(false);
+                          }}
+                          disabled={isCheckingUpdates}
+                          activeOpacity={0.8}
+                        >
+                          <Text style={[styles.settingsCheckBtnText, { color: theme.accent }]}>
+                            {isCheckingUpdates ? "⏳ Connecting to EAS Cloud..." : "🔄 Check for Updates Now"}
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                      <Text style={[styles.settingsHelpText, { color: theme.textTertiary }]}>
+                        Downloads latest live features and bug fixes without needing to reinstall the APK.
+                      </Text>
+                    </GlassSurface>
+                  </View>
+
+                  {/* ── 2. Data & Portals Backup ── */}
+                  <View style={styles.settingsSection}>
+                    <Text style={[styles.settingsSectionTitle, { color: theme.textSecondary }]}>
+                      BACKUP & MIGRATION
+                    </Text>
+                    <GlassSurface theme={theme} radius={radii.xl} style={styles.settingsCardGlass}>
+                      <TouchableOpacity
+                        style={styles.settingsActionRow}
+                        onPress={handleExportDecks}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.settingsActionIcon}>📤</Text>
+                        <View style={styles.settingsActionTextCol}>
+                          <Text style={[styles.settingsActionTitle, { color: theme.textPrimary }]}>
+                            Export Portals Backup
+                          </Text>
+                          <Text style={[styles.settingsActionSub, { color: theme.textSecondary }]}>
+                            Copy all {sites.length} sites as JSON or share to Google Drive / Notes
+                          </Text>
+                        </View>
+                        <Text style={[styles.settingsActionChevron, { color: theme.textTertiary }]}>›</Text>
+                      </TouchableOpacity>
+
+                      <View style={[styles.settingsRowDivider, { backgroundColor: theme.glassBorder }]} />
+
+                      <TouchableOpacity
+                        style={styles.settingsActionRow}
+                        onPress={() => {
+                          setSettingsModal(false);
+                          setImportModal(true);
+                        }}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.settingsActionIcon}>📥</Text>
+                        <View style={styles.settingsActionTextCol}>
+                          <Text style={[styles.settingsActionTitle, { color: theme.textPrimary }]}>
+                            Restore from JSON Backup
+                          </Text>
+                          <Text style={[styles.settingsActionSub, { color: theme.textSecondary }]}>
+                            Paste a JSON export to restore your bookmarks anytime
+                          </Text>
+                        </View>
+                        <Text style={[styles.settingsActionChevron, { color: theme.textTertiary }]}>›</Text>
+                      </TouchableOpacity>
+                    </GlassSurface>
+                  </View>
+
+                  {/* ── 3. Security & Sessions ── */}
+                  <View style={styles.settingsSection}>
+                    <Text style={[styles.settingsSectionTitle, { color: theme.textSecondary }]}>
+                      SECURITY & CACHE
+                    </Text>
+                    <GlassSurface theme={theme} radius={radii.xl} style={styles.settingsCardGlass}>
+                      {/* Biometric Toggle */}
+                      <TouchableOpacity
+                        style={styles.settingsActionRow}
+                        onPress={onToggleBiometric}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.settingsActionIcon}>🔒</Text>
+                        <View style={styles.settingsActionTextCol}>
+                          <Text style={[styles.settingsActionTitle, { color: theme.textPrimary }]}>
+                            Biometric App Lock
+                          </Text>
+                          <Text style={[styles.settingsActionSub, { color: theme.textSecondary }]}>
+                            {biometricEnabled ? "Enabled (Fingerprint / FaceID active)" : "Disabled (App opens freely)"}
+                          </Text>
+                        </View>
+                        <View style={[styles.togglePill, { backgroundColor: biometricEnabled ? theme.accent : (theme.isDark ? "rgba(255,255,255,0.15)" : "rgba(0,0,0,0.15)") }]}>
+                          <Text style={styles.togglePillText}>{biometricEnabled ? "ON" : "OFF"}</Text>
+                        </View>
+                      </TouchableOpacity>
+
+                      <View style={[styles.settingsRowDivider, { backgroundColor: theme.glassBorder }]} />
+
+                      {/* Clear All Sessions */}
+                      <TouchableOpacity
+                        style={styles.settingsActionRow}
+                        onPress={() => {
+                          Alert.alert(
+                            "Wipe All Browsing Data?",
+                            "This clears all saved cookies, sessions, and website storage across all portals.",
+                            [
+                              { text: "Cancel", style: "cancel" },
+                              {
+                                text: "Wipe All Data",
+                                style: "destructive",
+                                onPress: onClearAllSessions,
+                              },
+                            ]
+                          );
+                        }}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.settingsActionIcon}>🧹</Text>
+                        <View style={styles.settingsActionTextCol}>
+                          <Text style={[styles.settingsActionTitle, { color: theme.danger }]}>
+                            Wipe All Web Sessions
+                          </Text>
+                          <Text style={[styles.settingsActionSub, { color: theme.textSecondary }]}>
+                            Reset all login cookies and offline cache
+                          </Text>
+                        </View>
+                        <Text style={[styles.settingsActionChevron, { color: theme.textTertiary }]}>›</Text>
+                      </TouchableOpacity>
+                    </GlassSurface>
+                  </View>
+
+                  {/* ── 4. Appearance & About ── */}
+                  <View style={styles.settingsSection}>
+                    <Text style={[styles.settingsSectionTitle, { color: theme.textSecondary }]}>
+                      APPEARANCE
+                    </Text>
+                    <GlassSurface theme={theme} radius={radii.xl} style={styles.settingsCardGlass}>
+                      <TouchableOpacity
+                        style={styles.settingsActionRow}
+                        onPress={onToggleTheme}
+                        activeOpacity={0.75}
+                      >
+                        <Text style={styles.settingsActionIcon}>{isDark ? "🌙" : "☀️"}</Text>
+                        <View style={styles.settingsActionTextCol}>
+                          <Text style={[styles.settingsActionTitle, { color: theme.textPrimary }]}>
+                            Theme Mode
+                          </Text>
+                          <Text style={[styles.settingsActionSub, { color: theme.textSecondary }]}>
+                            Currently: {isDark ? "Midnight OLED (Dark)" : "Frost White (Light)"}
+                          </Text>
+                        </View>
+                        <Text style={[styles.settingsActionToggleText, { color: theme.accent }]}>
+                          Switch to {isDark ? "Light" : "Dark"}
+                        </Text>
+                      </TouchableOpacity>
+                    </GlassSurface>
+                  </View>
+
+                  {/* Footer Credits */}
+                  <View style={styles.settingsFooter}>
+                    <Text style={[styles.settingsFooterTitle, { color: theme.textPrimary }]}>
+                      {config.appName} • v1.0.0
+                    </Text>
+                    <Text style={[styles.settingsFooterSub, { color: theme.textTertiary }]}>
+                      Liquid Glass VisionOS Portal Launcher
+                    </Text>
+                    <Text style={[styles.settingsFooterCredit, { color: theme.textTertiary }]}>
+                      Developed with ❤️ by Aditya Soni
+                    </Text>
+                  </View>
+                </ScrollView>
+              </GlassSurface>
+            </Animated.View>
+          </Pressable>
+        </Modal>
+
+        {/* ── Restore from JSON Backup Modal ── */}
+        <Modal
+          visible={importModal}
+          animationType="fade"
+          transparent
+          onRequestClose={() => setImportModal(false)}
+        >
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            style={styles.modalBackdrop}
+          >
+            <Pressable style={styles.modalDismissOverlay} onPress={() => setImportModal(false)} />
+            <Animated.View
+              entering={SlideInDown.springify().damping(18)}
+              style={styles.modalSheetWrap}
+            >
+              <GlassSurface
+                theme={theme}
+                radius={radii.xxl}
+                intensity={theme.blurIntensityHeavy}
+                style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16 }]}
+              >
+                <View style={styles.modalHeaderRow}>
+                  <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>
+                    Restore Portals
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.modalCloseCircle, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}
+                    onPress={() => setImportModal(false)}
+                  >
+                    <Text style={[styles.modalCloseText, { color: theme.textSecondary }]}>✕</Text>
+                  </TouchableOpacity>
+                </View>
+                <Text style={[styles.modalDesc, { color: theme.textSecondary }]}>
+                  Paste your exported JSON backup text below to restore your saved portals.
+                </Text>
+
+                <View style={[styles.importInputWrap, { borderColor: theme.glassBorder, backgroundColor: theme.isDark ? "rgba(255,255,255,0.04)" : "rgba(0,0,0,0.02)" }]}>
+                  <TextInput
+                    style={[styles.importTextInput, { color: theme.textPrimary }]}
+                    placeholder='Paste JSON here (e.g. [{"name":"Google","url":"https://google.com"}])'
+                    placeholderTextColor={theme.textTertiary}
+                    multiline
+                    numberOfLines={5}
+                    value={importJsonText}
+                    onChangeText={setImportJsonText}
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                  />
+                </View>
+
+                <View style={styles.modalActionRow}>
+                  <TouchableOpacity
+                    style={[styles.modalCancelBtn, { borderColor: theme.glassBorder }]}
+                    onPress={async () => {
+                      const clip = await Clipboard.getString();
+                      if (clip) setImportJsonText(clip);
+                    }}
+                  >
+                    <Text style={[styles.modalCancelBtnText, { color: theme.accent }]}>
+                      📋 Paste
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.modalSaveBtn}
+                    onPress={handleImportDecks}
+                  >
+                    <LinearGradient
+                      colors={theme.fabGradient}
+                      start={{ x: 0, y: 0 }}
+                      end={{ x: 1, y: 0 }}
+                      style={styles.modalSaveGradient}
+                    >
+                      <Text style={styles.modalSaveBtnText}>Restore Portals</Text>
+                    </LinearGradient>
+                  </TouchableOpacity>
+                </View>
+              </GlassSurface>
+            </Animated.View>
+          </KeyboardAvoidingView>
         </Modal>
 
         {/* Liquid Glass Add Site Bottom Sheet Modal */}
@@ -1419,21 +1794,60 @@ function HomeScreen({
 
 // ──────────────────────────────────────────────────────────────
 // Site Screen: Persistent Logins & Cookies, Progress Bar,
-//              OAuth Auto-Assist & Google Sign-In
+//              OAuth Auto-Assist, Bottom Dock & Deck Switcher
 // ──────────────────────────────────────────────────────────────
-function SiteScreen({ site, theme, isDark, user, onBack, onForgetLogin }) {
+function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLogin, onSwitchSite }) {
   const webviewRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
   const [hasError, setHasError] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
+  const [canGoForward, setCanGoForward] = useState(false);
   const [reloadKey, setReloadKey] = useState(() => Date.now());
   const [isDesktop, setIsDesktop] = useState(false);
   const [adBlockEnabled, setAdBlockEnabled] = useState(true);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [loginPromptDismissed, setLoginPromptDismissed] = useState(false);
   const [detectedGoogleBtn, setDetectedGoogleBtn] = useState(false);
+  const [zoomLevel, setZoomLevel] = useState(1.0);
+  const [forceDark, setForceDark] = useState(false);
+  const [deckSwitcherVisible, setDeckSwitcherVisible] = useState(false);
   const insets = useSafeAreaInsets();
+
+  // Cycle text zoom levels
+  const cycleZoom = () => {
+    setZoomLevel((prev) => {
+      if (prev === 1.0) return 1.15;
+      if (prev === 1.15) return 1.30;
+      if (prev === 1.30) return 0.90;
+      return 1.0;
+    });
+  };
+
+  // Inject zoom & force dark mode dynamically
+  useEffect(() => {
+    if (!webviewRef.current || Platform.OS === "web") return;
+    const script = `
+      (function() {
+        try {
+          document.body.style.zoom = '${zoomLevel}';
+          var darkStyle = document.getElementById('mysites-force-dark-mode');
+          if (${forceDark}) {
+            if (!darkStyle) {
+              darkStyle = document.createElement('style');
+              darkStyle.id = 'mysites-force-dark-mode';
+              darkStyle.textContent = 'html { filter: invert(0.92) hue-rotate(180deg) !important; background-color: #121212 !important; } img, video, iframe, canvas, svg { filter: invert(1.08) hue-rotate(180deg) !important; }';
+              document.head.appendChild(darkStyle);
+            }
+          } else if (darkStyle) {
+            darkStyle.remove();
+          }
+        } catch(e) {}
+      })();
+      true;
+    `;
+    webviewRef.current.injectJavaScript(script);
+  }, [zoomLevel, forceDark]);
 
   // Animated progress bar width (smooth transitions instead of abrupt jumps)
   const progressAnim = useSharedValue(0.1);
@@ -1699,6 +2113,7 @@ function SiteScreen({ site, theme, isDark, user, onBack, onForgetLogin }) {
             onLoadProgress={({ nativeEvent }) => setProgress(nativeEvent.progress)}
             onNavigationStateChange={(navState) => {
               setCanGoBack(navState.canGoBack);
+              setCanGoForward(navState.canGoForward);
               flushCookies();
             }}
             onError={() => {
@@ -1807,15 +2222,24 @@ function SiteScreen({ site, theme, isDark, user, onBack, onForgetLogin }) {
               <Text style={[styles.siteHeaderBackText, { color: theme.textPrimary }]}>Decks</Text>
             </TouchableOpacity>
 
-            {/* Site Title and Host chip */}
-            <View style={styles.siteHeaderTitleContainer}>
-              <Text style={[styles.siteHeaderTitle, { color: theme.textPrimary }]} numberOfLines={1}>
-                {site.name}
-              </Text>
+            {/* Site Title and Host chip (tap to switch portals) */}
+            <TouchableOpacity
+              style={styles.siteHeaderTitleContainer}
+              onPress={() => setDeckSwitcherVisible(true)}
+              activeOpacity={0.7}
+            >
+              <View style={styles.siteHeaderTitleRowFlex}>
+                <Text style={[styles.siteHeaderTitle, { color: theme.textPrimary }]} numberOfLines={1}>
+                  {site.name}
+                </Text>
+                {sites.length > 1 && (
+                  <Text style={[styles.siteHeaderChevronDown, { color: theme.accent }]}>▾</Text>
+                )}
+              </View>
               <Text style={[styles.siteHeaderHost, { color: theme.textSecondary }]} numberOfLines={1}>
                 {hostnameOf(site.url)}
               </Text>
-            </View>
+            </TouchableOpacity>
 
             {/* Right Action Controls: Forget Login, Refresh, External link */}
             <View style={styles.siteHeaderActions}>
@@ -1936,6 +2360,184 @@ function SiteScreen({ site, theme, isDark, user, onBack, onForgetLogin }) {
           )}
         </GlassSurface>
       </View>
+
+      {/* VisionOS Floating Bottom Navigation Dock (Arc / Safari Style) */}
+      <View style={[styles.siteBottomDockWrap, { bottom: Math.max(insets.bottom, 12) + 6 }]}>
+        <GlassSurface
+          theme={theme}
+          radius={radii.pill}
+          intensity={theme.blurIntensityHeavy}
+          style={styles.siteBottomDockGlass}
+        >
+          <View style={styles.siteBottomDockRow}>
+            {/* Back in History */}
+            <TouchableOpacity
+              style={[styles.dockBtn, !canGoBack && styles.dockBtnDisabled]}
+              onPress={() => canGoBack && webviewRef.current?.goBack()}
+              disabled={!canGoBack}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Back in page history"
+            >
+              <Text style={[styles.dockBtnText, { color: canGoBack ? theme.textPrimary : theme.textTertiary }]}>
+                ‹
+              </Text>
+            </TouchableOpacity>
+
+            {/* Forward in History */}
+            <TouchableOpacity
+              style={[styles.dockBtn, !canGoForward && styles.dockBtnDisabled]}
+              onPress={() => canGoForward && webviewRef.current?.goForward()}
+              disabled={!canGoForward}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Forward in page history"
+            >
+              <Text style={[styles.dockBtnText, { color: canGoForward ? theme.textPrimary : theme.textTertiary }]}>
+                ›
+              </Text>
+            </TouchableOpacity>
+
+            <View style={[styles.dockDivider, { backgroundColor: theme.glassBorder }]} />
+
+            {/* Text Zoom Control */}
+            <TouchableOpacity
+              style={[
+                styles.dockPillBtn,
+                zoomLevel !== 1.0 && { backgroundColor: theme.accentGlow },
+              ]}
+              onPress={cycleZoom}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Adjust text zoom"
+            >
+              <Text style={[styles.dockPillText, { color: zoomLevel !== 1.0 ? theme.accent : theme.textSecondary }]}>
+                {zoomLevel === 1.0 ? "100%" : `${Math.round(zoomLevel * 100)}%`}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Force Dark Mode Toggle */}
+            <TouchableOpacity
+              style={[
+                styles.dockPillBtn,
+                forceDark && { backgroundColor: theme.accentGlow },
+              ]}
+              onPress={() => setForceDark((prev) => !prev)}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Force high-contrast dark mode"
+            >
+              <Text style={[styles.dockPillText, { color: forceDark ? theme.accent : theme.textSecondary }]}>
+                {forceDark ? "🌙 Dark" : "☀️ Page"}
+              </Text>
+            </TouchableOpacity>
+
+            <View style={[styles.dockDivider, { backgroundColor: theme.glassBorder }]} />
+
+            {/* Share Page */}
+            <TouchableOpacity
+              style={styles.dockBtn}
+              onPress={() => {
+                Share.share({
+                  title: site.name,
+                  message: `${site.name} - ${site.url}`,
+                  url: site.url,
+                }).catch(() => {});
+              }}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Share site"
+            >
+              <Text style={[styles.dockBtnIcon, { color: theme.textSecondary }]}>↗</Text>
+            </TouchableOpacity>
+
+            {/* Home Portal Button */}
+            <TouchableOpacity
+              style={[styles.dockBtnHome, { backgroundColor: theme.accentGlow }]}
+              onPress={onBack}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityLabel="Return to Decks"
+            >
+              <Text style={[styles.dockBtnIcon, { color: theme.accent }]}>🏠</Text>
+            </TouchableOpacity>
+          </View>
+        </GlassSurface>
+      </View>
+
+      {/* Quick Deck Switcher Modal */}
+      <Modal
+        visible={deckSwitcherVisible}
+        animationType="fade"
+        transparent
+        onRequestClose={() => setDeckSwitcherVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setDeckSwitcherVisible(false)}>
+          <Animated.View
+            entering={SlideInDown.springify().damping(18)}
+            style={styles.modalSheetWrap}
+          >
+            <GlassSurface
+              theme={theme}
+              radius={radii.xxl}
+              intensity={theme.blurIntensityHeavy}
+              style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16, maxHeight: SCREEN_HEIGHT * 0.72 }]}
+            >
+              <View style={styles.dragPillHandle}>
+                <View style={[styles.dragPill, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
+              </View>
+
+              <View style={styles.settingsModalHeaderRow}>
+                <Text style={[styles.settingsModalTitle, { color: theme.textPrimary }]}>
+                  Switch Portal
+                </Text>
+                <TouchableOpacity
+                  style={[styles.modalCloseCircle, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" }]}
+                  onPress={() => setDeckSwitcherVisible(false)}
+                >
+                  <Text style={[styles.modalCloseText, { color: theme.textSecondary }]}>✕</Text>
+                </TouchableOpacity>
+              </View>
+
+              <ScrollView showsVerticalScrollIndicator={false} style={styles.switcherScroll}>
+                {sites.map((s) => {
+                  const isCurrent = s.id === site.id;
+                  return (
+                    <TouchableOpacity
+                      key={s.id}
+                      style={[
+                        styles.switcherItemRow,
+                        isCurrent && {
+                          backgroundColor: theme.accentGlow,
+                          borderColor: theme.accent,
+                          borderWidth: 1,
+                        },
+                      ]}
+                      onPress={() => {
+                        setDeckSwitcherVisible(false);
+                        if (!isCurrent && onSwitchSite) {
+                          onSwitchSite(s);
+                        }
+                      }}
+                    >
+                      <GlassFavicon url={s.url} name={s.name} theme={theme} />
+                      <View style={styles.switcherItemTextCol}>
+                        <Text style={[styles.switcherItemName, { color: theme.textPrimary }]} numberOfLines={1}>
+                          {s.name}
+                        </Text>
+                        <Text style={[styles.switcherItemUrl, { color: theme.textSecondary }]} numberOfLines={1}>
+                          {hostnameOf(s.url)}
+                        </Text>
+                      </View>
+                      {isCurrent ? (
+                        <View style={[styles.currentPill, { backgroundColor: theme.accent }]}>
+                          <Text style={styles.currentPillText}>Active</Text>
+                        </View>
+                      ) : (
+                        <Text style={[styles.switcherItemChevron, { color: theme.textTertiary }]}>›</Text>
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </GlassSurface>
+          </Animated.View>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -2226,6 +2828,7 @@ export default function App() {
         ) : activeSite ? (
           <SiteScreen
             site={activeSite}
+            sites={sites}
             theme={theme}
             isDark={isDark}
             user={user}
@@ -2234,6 +2837,10 @@ export default function App() {
               setActiveSite(null);
             }}
             onForgetLogin={handleForgetLogin}
+            onSwitchSite={(newSite) => {
+              flushCookies();
+              handleOpen(newSite);
+            }}
           />
         ) : (
           <HomeScreen
@@ -2255,6 +2862,14 @@ export default function App() {
             updateReady={updateReady}
             onCheckUpdates={handleCheckUpdates}
             onRestartApp={handleRestartApp}
+            onImportSites={(importedSites) => {
+              const combined = [...importedSites, ...sites.filter((s) => !importedSites.some((i) => i.url === s.url))];
+              persistSites(combined);
+            }}
+            onClearAllSessions={async () => {
+              await clearAllCookies();
+              Alert.alert("Sessions Cleared", "All browsing sessions, cookies, and website data have been cleared.");
+            }}
           />
         )}
       </Animated.View>
@@ -3401,5 +4016,304 @@ const styles = StyleSheet.create({
   quickLoginCloseText: {
     fontSize: 14,
     fontWeight: "600",
+  },
+
+  // Notification badge dot on header settings icon
+  updateBadgeDot: {
+    position: "absolute",
+    top: 5,
+    right: 5,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#EF4444",
+  },
+
+  // In-WebView Header Title Row with chevron
+  siteHeaderTitleRowFlex: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  siteHeaderChevronDown: {
+    fontSize: 12,
+    marginLeft: 4,
+    fontWeight: "800",
+  },
+
+  // VisionOS Bottom Navigation Dock
+  siteBottomDockWrap: {
+    position: "absolute",
+    left: 16,
+    right: 16,
+    zIndex: 999,
+    alignItems: "center",
+  },
+  siteBottomDockGlass: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    width: "100%",
+    maxWidth: 440,
+  },
+  siteBottomDockRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  dockBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: radii.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dockBtnDisabled: {
+    opacity: 0.35,
+  },
+  dockBtnText: {
+    fontSize: 22,
+    fontWeight: "600",
+  },
+  dockBtnIcon: {
+    fontSize: 16,
+  },
+  dockBtnHome: {
+    width: 36,
+    height: 36,
+    borderRadius: radii.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  dockDivider: {
+    width: 1,
+    height: 20,
+    marginHorizontal: 2,
+  },
+  dockPillBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+  },
+  dockPillText: {
+    fontSize: 12,
+    fontWeight: "700",
+  },
+
+  // Quick Deck Switcher Modal
+  switcherScroll: {
+    maxHeight: 380,
+  },
+  switcherItemRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderRadius: radii.lg,
+    marginBottom: 8,
+  },
+  switcherItemTextCol: {
+    flex: 1,
+  },
+  switcherItemName: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  switcherItemUrl: {
+    fontSize: 11.5,
+    fontWeight: "500",
+    marginTop: 2,
+  },
+  currentPill: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.xs,
+  },
+  currentPillText: {
+    color: "#fff",
+    fontSize: 10.5,
+    fontWeight: "800",
+    textTransform: "uppercase",
+  },
+  switcherItemChevron: {
+    fontSize: 20,
+    marginLeft: 8,
+  },
+
+  // Settings & Updates Hub Sheet
+  settingsModalHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: 16,
+  },
+  settingsModalTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    letterSpacing: -0.4,
+  },
+  settingsScroll: {
+    maxHeight: 520,
+  },
+  settingsSection: {
+    marginBottom: 18,
+  },
+  settingsSectionTitle: {
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.8,
+    textTransform: "uppercase",
+    marginBottom: 8,
+    marginLeft: 4,
+  },
+  settingsCardGlass: {
+    padding: 16,
+  },
+  settingsCardRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 14,
+  },
+  settingsCardIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: radii.md,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: 12,
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  settingsCardEmoji: {
+    fontSize: 22,
+  },
+  settingsCardTextCol: {
+    flex: 1,
+  },
+  settingsCardBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  settingsCardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  channelBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: radii.xs,
+  },
+  channelBadgeText: {
+    fontSize: 10.5,
+    fontWeight: "700",
+    textTransform: "uppercase",
+  },
+  settingsCardSub: {
+    fontSize: 12,
+    marginTop: 2,
+    lineHeight: 16,
+  },
+  settingsUpdateBtn: {
+    borderRadius: radii.pill,
+    overflow: "hidden",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  settingsUpdateBtnGradient: {
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    width: "100%",
+  },
+  settingsUpdateBtnText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  settingsCheckBtnText: {
+    fontSize: 13.5,
+    fontWeight: "700",
+    paddingVertical: 11,
+    textAlign: "center",
+  },
+  settingsHelpText: {
+    fontSize: 11,
+    lineHeight: 15,
+    marginTop: 8,
+    textAlign: "center",
+  },
+  settingsActionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+  },
+  settingsActionIcon: {
+    fontSize: 20,
+    marginRight: 14,
+  },
+  settingsActionTextCol: {
+    flex: 1,
+  },
+  settingsActionTitle: {
+    fontSize: 14.5,
+    fontWeight: "700",
+  },
+  settingsActionSub: {
+    fontSize: 11.5,
+    marginTop: 2,
+    lineHeight: 15,
+  },
+  settingsActionChevron: {
+    fontSize: 20,
+    marginLeft: 8,
+  },
+  settingsActionToggleText: {
+    fontSize: 13,
+    fontWeight: "700",
+    marginLeft: 8,
+  },
+  settingsRowDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 4,
+  },
+  togglePill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: radii.pill,
+    marginLeft: 8,
+  },
+  togglePillText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "800",
+  },
+  settingsFooter: {
+    alignItems: "center",
+    paddingVertical: 20,
+    paddingBottom: 30,
+  },
+  settingsFooterTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  settingsFooterSub: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  settingsFooterCredit: {
+    fontSize: 11,
+    marginTop: 4,
+  },
+
+  // Import JSON Modal
+  importInputWrap: {
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    padding: 12,
+    marginBottom: 16,
+  },
+  importTextInput: {
+    fontSize: 13,
+    minHeight: 100,
+    textAlignVertical: "top",
   },
 });
