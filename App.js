@@ -2840,6 +2840,9 @@ export default function App() {
   const [updateReady, setUpdateReady] = useState(false);
   const [sortMode, setSortMode] = useState("default");
   const [autoLockTimeout, setAutoLockTimeout] = useState("immediate");
+  // Known Google accounts for fast sign-in picker
+  const [knownAccounts, setKnownAccounts] = useState([]);
+  const [accountPickerVisible, setAccountPickerVisible] = useState(false);
 
   // Theme preference
   const systemScheme = useColorScheme();
@@ -2863,6 +2866,10 @@ export default function App() {
         if (savedSort) setSortMode(savedSort);
         const savedAutoLock = await AsyncStorage.getItem(AUTOLOCK_STORAGE_KEY);
         if (savedAutoLock) setAutoLockTimeout(savedAutoLock);
+
+        // Load previously signed-in Google accounts for fast picker
+        const known = await authService.getKnownAccounts();
+        if (known?.length > 0) setKnownAccounts(known);
 
         // Check biometric lock
         const bioLock = await AsyncStorage.getItem(BIOMETRIC_STORAGE_KEY);
@@ -3003,12 +3010,17 @@ export default function App() {
     setActiveSite(fresh);
   };
 
-  // In-app Google Sign-In handler
-  const handleSignIn = async () => {
+  // ── Google Sign-In: smart account picker ──────────────────────
+  // Core sign-in routine — accepts an optional loginHint (email) so that
+  // returning users skip the Google account picker entirely.
+  const executeSignIn = async (loginHint = undefined) => {
     try {
-      const profile = await authService.promptGoogleSignIn();
+      const profile = await authService.promptGoogleSignIn({ loginHint });
       if (profile) {
         setUser(profile);
+        // Keep knownAccounts in sync (saveKnownAccount is idempotent for demos)
+        const updated = await authService.getKnownAccounts();
+        setKnownAccounts(updated);
         // Sync existing sites to cloud
         await authService.syncSitesToCloud(profile, sites);
         if (profile.isDemo) {
@@ -3017,7 +3029,7 @@ export default function App() {
             "You are signed in as Demo User. Your deck will now sync locally."
           );
         } else {
-          Alert.alert("Signed In", `Welcome back, ${profile.name}!`);
+          Alert.alert("Signed In", `Welcome back, ${profile.name}! 👋`);
         }
       }
     } catch (err) {
@@ -3040,7 +3052,21 @@ export default function App() {
     }
   };
 
+  // Called when the user taps the Sign In button in the header.
+  // If there are previously used accounts, show the fast-picker bottom sheet.
+  // Otherwise go directly to the Google browser flow.
+  const handleSignIn = async () => {
+    const known = await authService.getKnownAccounts();
+    setKnownAccounts(known);
+    if (known.length > 0) {
+      setAccountPickerVisible(true);
+    } else {
+      await executeSignIn();
+    }
+  };
+
   const handleSignOut = async () => {
+    if (user?.email) await authService.removeKnownAccount(user.email);
     await authService.signOutUser();
     setUser(null);
   };
@@ -3187,6 +3213,124 @@ export default function App() {
             }}
           />
         )}
+
+        {/* ── Google Account Picker Modal ──────────────────────────── */}
+        <Modal
+          visible={accountPickerVisible}
+          transparent
+          animationType="slide"
+          onRequestClose={() => setAccountPickerVisible(false)}
+        >
+          <Pressable
+            style={styles.accountPickerBackdrop}
+            onPress={() => setAccountPickerVisible(false)}
+          >
+            <Pressable style={styles.accountPickerSheetOuter} onPress={() => {}}>
+              <GlassSurface theme={theme} radius={radii.xxl} style={styles.accountPickerSheet}>
+                {/* Handle bar */}
+                <View style={[styles.accountPickerHandle, { backgroundColor: theme.glassBorder }]} />
+
+                {/* Google G header */}
+                <View style={styles.accountPickerHeader}>
+                  <LinearGradient
+                    colors={["#4285F4", "#34A853"]}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.accountPickerGIcon}
+                  >
+                    <Text style={styles.accountPickerGText}>G</Text>
+                  </LinearGradient>
+                  <View style={styles.accountPickerHeaderText}>
+                    <Text style={[styles.accountPickerTitle, { color: theme.textPrimary }]}>
+                      Sign in with Google
+                    </Text>
+                    <Text style={[styles.accountPickerSub, { color: theme.textSecondary }]}>
+                      Choose an account or add a new one
+                    </Text>
+                  </View>
+                </View>
+
+                {/* Saved accounts list */}
+                <ScrollView style={styles.accountPickerList} showsVerticalScrollIndicator={false}>
+                  {knownAccounts.map((acct, idx) => (
+                    <TouchableOpacity
+                      key={acct.email}
+                      style={[
+                        styles.accountPickerRow,
+                        idx < knownAccounts.length - 1 && {
+                          borderBottomWidth: StyleSheet.hairlineWidth,
+                          borderBottomColor: theme.glassBorder,
+                        },
+                      ]}
+                      activeOpacity={0.7}
+                      onPress={async () => {
+                        setAccountPickerVisible(false);
+                        await executeSignIn(acct.email);
+                      }}
+                    >
+                      {/* Avatar */}
+                      {acct.picture ? (
+                        <Image source={{ uri: acct.picture }} style={styles.accountPickerAvatar} />
+                      ) : (
+                        <LinearGradient
+                          colors={theme.fabGradient}
+                          style={styles.accountPickerAvatarFallback}
+                        >
+                          <Text style={styles.accountPickerAvatarText}>
+                            {(acct.name || acct.email)[0].toUpperCase()}
+                          </Text>
+                        </LinearGradient>
+                      )}
+                      {/* Info */}
+                      <View style={styles.accountPickerInfo}>
+                        <Text style={[styles.accountPickerName, { color: theme.textPrimary }]} numberOfLines={1}>
+                          {acct.name || acct.email}
+                        </Text>
+                        <Text style={[styles.accountPickerEmail, { color: theme.textSecondary }]} numberOfLines={1}>
+                          {acct.email}
+                        </Text>
+                      </View>
+                      {/* Quick-sign indicator */}
+                      <View style={[styles.accountPickerQuickBadge, { backgroundColor: theme.accent + "22" }]}>
+                        <Text style={[styles.accountPickerQuickText, { color: theme.accent }]}>
+                          ⚡ Quick
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+
+                {/* Divider + "Use another account" */}
+                <View style={[styles.accountPickerDivider, { backgroundColor: theme.glassBorder }]} />
+                <TouchableOpacity
+                  style={styles.accountPickerAddRow}
+                  activeOpacity={0.7}
+                  onPress={async () => {
+                    setAccountPickerVisible(false);
+                    await executeSignIn(); // No hint → shows Google's account chooser
+                  }}
+                >
+                  <View style={[styles.accountPickerAddIcon, { borderColor: theme.glassBorder }]}>
+                    <Text style={[styles.accountPickerAddPlus, { color: theme.accent }]}>＋</Text>
+                  </View>
+                  <Text style={[styles.accountPickerAddText, { color: theme.textPrimary }]}>
+                    Use another account
+                  </Text>
+                </TouchableOpacity>
+
+                {/* Cancel */}
+                <TouchableOpacity
+                  style={[styles.accountPickerCancelBtn, { borderColor: theme.glassBorder }]}
+                  onPress={() => setAccountPickerVisible(false)}
+                >
+                  <Text style={[styles.accountPickerCancelText, { color: theme.textSecondary }]}>
+                    Cancel
+                  </Text>
+                </TouchableOpacity>
+              </GlassSurface>
+            </Pressable>
+          </Pressable>
+        </Modal>
       </Animated.View>
     </SafeAreaProvider>
   );
@@ -4685,4 +4829,144 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   customEmojiText: { fontSize: 22 },
+
+  // ── Google Account Picker Sheet ─────────────────────────────
+  accountPickerBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "flex-end",
+  },
+  accountPickerSheetOuter: {
+    // prevent backdrop tap from propagating through the sheet
+  },
+  accountPickerSheet: {
+    paddingTop: 10,
+    paddingHorizontal: 16,
+    paddingBottom: 28,
+    borderBottomLeftRadius: 0,
+    borderBottomRightRadius: 0,
+  },
+  accountPickerHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    alignSelf: "center",
+    marginBottom: 20,
+    opacity: 0.4,
+  },
+  accountPickerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 18,
+    gap: 14,
+  },
+  accountPickerGIcon: {
+    width: 46,
+    height: 46,
+    borderRadius: 23,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  accountPickerGText: {
+    color: "#fff",
+    fontSize: 22,
+    fontWeight: "800",
+    letterSpacing: -0.5,
+  },
+  accountPickerHeaderText: {
+    flex: 1,
+  },
+  accountPickerTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: -0.3,
+  },
+  accountPickerSub: {
+    fontSize: 12.5,
+    marginTop: 2,
+  },
+  accountPickerList: {
+    maxHeight: 260,
+  },
+  accountPickerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    gap: 12,
+  },
+  accountPickerAvatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+  },
+  accountPickerAvatarFallback: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  accountPickerAvatarText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "800",
+  },
+  accountPickerInfo: {
+    flex: 1,
+  },
+  accountPickerName: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  accountPickerEmail: {
+    fontSize: 12,
+    marginTop: 2,
+  },
+  accountPickerQuickBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: radii.pill,
+  },
+  accountPickerQuickText: {
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  accountPickerDivider: {
+    height: StyleSheet.hairlineWidth,
+    marginVertical: 10,
+  },
+  accountPickerAddRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 12,
+    gap: 12,
+  },
+  accountPickerAddIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  accountPickerAddPlus: {
+    fontSize: 22,
+    fontWeight: "300",
+    lineHeight: 26,
+  },
+  accountPickerAddText: {
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  accountPickerCancelBtn: {
+    marginTop: 10,
+    paddingVertical: 13,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    alignItems: "center",
+  },
+  accountPickerCancelText: {
+    fontSize: 14,
+    fontWeight: "600",
+  },
 });

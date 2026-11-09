@@ -9,6 +9,9 @@ WebBrowser.maybeCompleteAuthSession();
 const USER_STORAGE_KEY = "app_user_profile_v1";
 const CLOUD_SYNC_KEY_PREFIX = "cloud_sync_deck_";
 
+/** Storage key for the list of previously signed-in Google accounts */
+const KNOWN_ACCOUNTS_KEY = "known_google_accounts_v1";
+
 // Google OpenID Discovery Document
 export const googleDiscovery = {
   authorizationEndpoint: "https://accounts.google.com/o/oauth2/v2/auth",
@@ -123,6 +126,58 @@ export async function signOutUser() {
   }
 }
 
+// ──────────────────────────────────────────────────────────────
+// Known Accounts — remembers previously signed-in Google emails
+// so the app can offer a fast one-tap picker on next sign-in.
+// ──────────────────────────────────────────────────────────────
+
+/**
+ * Load the list of previously signed-in Google account profiles.
+ * Returns an array of { email, name, picture } objects, most-recent first.
+ */
+export async function getKnownAccounts() {
+  try {
+    const raw = await AsyncStorage.getItem(KNOWN_ACCOUNTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Persist a successfully signed-in profile into the known-accounts list.
+ * Deduplicates by email and keeps the most-recent entry at the front (max 5).
+ */
+export async function saveKnownAccount(profile) {
+  if (!profile?.email || profile.isDemo) return;
+  try {
+    const existing = await getKnownAccounts();
+    const filtered = existing.filter((a) => a.email !== profile.email);
+    const updated = [
+      { email: profile.email, name: profile.name, picture: profile.picture },
+      ...filtered,
+    ].slice(0, 5);
+    await AsyncStorage.setItem(KNOWN_ACCOUNTS_KEY, JSON.stringify(updated));
+  } catch {
+    // non-critical
+  }
+}
+
+/**
+ * Remove a single account from the known-accounts list (e.g. after sign-out).
+ */
+export async function removeKnownAccount(email) {
+  try {
+    const existing = await getKnownAccounts();
+    await AsyncStorage.setItem(
+      KNOWN_ACCOUNTS_KEY,
+      JSON.stringify(existing.filter((a) => a.email !== email))
+    );
+  } catch {
+    // non-critical
+  }
+}
+
 /**
  * Sync saved sites list to Cloud (e.g. Firebase, Supabase, or Cloud Backup)
  */
@@ -166,8 +221,13 @@ export async function fetchSitesFromCloud(user) {
 
 /**
  * Start In-App Google Sign-in flow using official AuthRequest & WebBrowser.
+ *
+ * @param {Object} options
+ * @param {string} [options.loginHint] - Pre-fill a known Google email to skip account picker.
+ *   When provided, Google skips the account list and shows one-tap "Continue as {name}".
+ *   Pass undefined / null for a fresh sign-in that lets the user pick any account.
  */
-export async function promptGoogleSignIn() {
+export async function promptGoogleSignIn({ loginHint } = {}) {
   const clientId = config.googleClientId?.trim();
 
   // If no client ID configured in config.js, sign in with Demo profile
@@ -185,6 +245,14 @@ export async function promptGoogleSignIn() {
   console.log("[Auth] Starting Google OAuth flow...");
   console.log("[Auth] Client ID:", clientId);
   console.log("[Auth] Redirect URI:", redirectUri);
+  if (loginHint) console.log("[Auth] Login hint:", loginHint);
+
+  // Build extraParams: when a known account email is supplied use login_hint for
+  // instant one-tap flow. Without a hint, force the account chooser so the user
+  // can pick any Google account on the device (prompt=select_account).
+  const extraParams = loginHint
+    ? { access_type: "offline", login_hint: loginHint }
+    : { access_type: "offline", prompt: "select_account" };
 
   // 1. Prepare AuthRequest with PKCE
   const request = new AuthSession.AuthRequest({
@@ -193,10 +261,7 @@ export async function promptGoogleSignIn() {
     scopes: ["openid", "profile", "email"],
     responseType: AuthSession.ResponseType.Code,
     usePKCE: true,
-    extraParams: {
-      access_type: "offline",
-      prompt: "consent",
-    },
+    extraParams,
   });
 
   // 2. Launch browser authentication prompt
@@ -206,7 +271,9 @@ export async function promptGoogleSignIn() {
   if (result.type === "success") {
     // Check if access_token was returned directly
     if (result.params?.access_token) {
-      return await fetchGoogleUserProfile(result.params.access_token);
+      const profile = await fetchGoogleUserProfile(result.params.access_token);
+      await saveKnownAccount(profile);
+      return profile;
     }
 
     // Exchange authorization code for access token via PKCE
@@ -224,7 +291,9 @@ export async function promptGoogleSignIn() {
       );
 
       if (tokenResponse?.accessToken) {
-        return await fetchGoogleUserProfile(tokenResponse.accessToken);
+        const profile = await fetchGoogleUserProfile(tokenResponse.accessToken);
+        await saveKnownAccount(profile);
+        return profile;
       }
       throw new Error("No access token received from Google token exchange.");
     }
@@ -254,6 +323,9 @@ export default {
   syncSitesToCloud,
   fetchSitesFromCloud,
   promptGoogleSignIn,
+  getKnownAccounts,
+  saveKnownAccount,
+  removeKnownAccount,
   get IS_DEMO_AUTH() {
     return IS_DEMO_AUTH;
   },
