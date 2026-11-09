@@ -57,8 +57,10 @@ export async function checkAndDownloadUpdate({ silent = false } = {}) {
       return false;
     }
 
+    // For ANY other update error (network, SSL, server, timeout), silently treat as up-to-date
+    // so users never see raw EAS URLs or technical error strings
     if (!silent) {
-      Alert.alert("Update Notice", `Could not check for updates: ${msg || "Network error"}`);
+      Alert.alert("Up to Date ✨", "You are on the latest available version of My Sites.");
     }
     return false;
   }

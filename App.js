@@ -72,10 +72,26 @@ const AD_BLOCK_DOMAINS = [
   "scorecardresearch.com",
   "taboola.com",
   "outbrain.com",
-  "criteo.com"
+  "criteo.com",
+  "adroll.com",
+  "amazon-adsystem.com",
+  "popads.net"
 ];
 const APP_CATEGORIES = ["All", "Work", "Social", "Dev", "Media", "Finance"];
 const BIOMETRIC_STORAGE_KEY = "user_biometric_lock_v1";
+const AUTOLOCK_STORAGE_KEY = "user_autolock_timeout_v2";
+const SORT_STORAGE_KEY = "portal_sort_mode_v1";
+
+const PRESET_COLORS = [
+  "#06B6D4", // Cyan
+  "#6366F1", // Indigo
+  "#A855F7", // Purple
+  "#F43F5E", // Rose
+  "#F59E0B", // Amber
+  "#10B981", // Emerald
+];
+
+const PRESET_EMOJIS = ["🌐", "💼", "💻", "📱", "🎬", "🎵", "📊", "🛒", "📚", "🎮", "⚡", "🔒"];
 
 const ANDROID_MOBILE_UA =
   "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
@@ -372,19 +388,35 @@ function GlassSurface({
 }
 
 // ──────────────────────────────────────────────────────────────
-// Glass Favicon Badge (2x/3x density circular glass with fallback)
+// Glass Favicon Badge (2x/3x density circular glass with custom emoji/color fallback)
 // ──────────────────────────────────────────────────────────────
-function GlassFavicon({ url, name, theme }) {
+function GlassFavicon({ url, name, theme, color, emoji }) {
   const [error, setError] = useState(false);
   const faviconUrl = getFaviconUrl(url);
+
+  if (emoji) {
+    return (
+      <View
+        style={[
+          styles.faviconBadge,
+          {
+            backgroundColor: color ? `${color}28` : (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.85)"),
+            borderColor: color || theme.glassBorder,
+          },
+        ]}
+      >
+        <Text style={styles.customEmojiText}>{emoji}</Text>
+      </View>
+    );
+  }
 
   return (
     <View
       style={[
         styles.faviconBadge,
         {
-          backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.85)",
-          borderColor: theme.glassBorder,
+          backgroundColor: color ? `${color}20` : (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(255,255,255,0.85)"),
+          borderColor: color || theme.glassBorder,
         },
       ]}
     >
@@ -397,7 +429,7 @@ function GlassFavicon({ url, name, theme }) {
         />
       ) : (
         <LinearGradient
-          colors={theme.accentGradient}
+          colors={color ? [color, color] : theme.accentGradient}
           style={styles.faviconFallback}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
@@ -413,7 +445,7 @@ function GlassFavicon({ url, name, theme }) {
 // Site Tile: Liquid Glass Card with spring press, pin badge,
 //            visit counter, share & inline actions
 // ──────────────────────────────────────────────────────────────
-function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
+function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin, onEdit }) {
   const scale = useSharedValue(1);
   const [showMenu, setShowMenu] = useState(false);
 
@@ -463,11 +495,21 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
               borderColor: theme.isDark ? "rgba(56, 189, 248, 0.45)" : "rgba(37, 99, 235, 0.45)",
               borderWidth: 1.2,
             },
+            item.color && {
+              borderLeftColor: item.color,
+              borderLeftWidth: 3.5,
+            },
           ]}
         >
           <View style={styles.tileRow}>
             {/* Favicon with VisionOS squircle badge */}
-            <GlassFavicon url={item.url} name={item.name} theme={theme} />
+            <GlassFavicon
+              url={item.url}
+              name={item.name}
+              theme={theme}
+              color={item.color}
+              emoji={item.emoji}
+            />
 
             {/* Info */}
             <View style={styles.tileInfo}>
@@ -554,6 +596,23 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
                 </View>
               </TouchableOpacity>
 
+              {/* Edit Portal */}
+              <TouchableOpacity
+                style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={() => {
+                  setShowMenu(false);
+                  if (onEdit) onEdit(item);
+                }}
+              >
+                <Text style={styles.menuItemIcon}>✏️</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Edit Portal</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>
+                    Customize name, category, emoji icon, or accent color
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
               {/* Share */}
               <TouchableOpacity
                 style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
@@ -592,8 +651,8 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin }) {
               >
                 <Text style={styles.menuItemIcon}>🔒</Text>
                 <View>
-                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Forget Login / Clear Session</Text>
-                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>Wipes cookies and local storage for this site</Text>
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Clear Site Session & Cookies</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>Wipes cookies and local storage for this portal only</Text>
                 </View>
               </TouchableOpacity>
 
@@ -713,6 +772,10 @@ function HomeScreen({
   isDark,
   user,
   biometricEnabled,
+  autoLockTimeout,
+  onChangeAutoLockTimeout,
+  sortMode = "default",
+  onSelectSortMode,
   onToggleBiometric,
   onSignIn,
   onSignOut,
@@ -720,6 +783,7 @@ function HomeScreen({
   onToggleTheme,
   onOpen,
   onAdd,
+  onEdit,
   onDelete,
   onForgetLogin,
   onPin,
@@ -730,6 +794,7 @@ function HomeScreen({
   onClearAllSessions,
 }) {
   const [modalVisible, setModalVisible] = useState(false);
+  const [editingSite, setEditingSite] = useState(null);
   const [profileModal, setProfileModal] = useState(false);
   const [settingsModal, setSettingsModal] = useState(false);
   const [importModal, setImportModal] = useState(false);
@@ -737,6 +802,8 @@ function HomeScreen({
   const [isCheckingUpdates, setIsCheckingUpdates] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [nameInput, setNameInput] = useState("");
+  const [colorInput, setColorInput] = useState("");
+  const [emojiInput, setEmojiInput] = useState("");
   const [syncStatus, setSyncStatus] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("All");
@@ -747,7 +814,25 @@ function HomeScreen({
   const resetForm = () => {
     setUrlInput("");
     setNameInput("");
+    setColorInput("");
+    setEmojiInput("");
     setCategoryInput("All");
+    setEditingSite(null);
+  };
+
+  const handleStartEdit = (siteItem) => {
+    setEditingSite(siteItem);
+    setUrlInput(siteItem.url);
+    setNameInput(siteItem.name);
+    setCategoryInput(siteItem.category || "All");
+    setColorInput(siteItem.color || "");
+    setEmojiInput(siteItem.emoji || "");
+    setModalVisible(true);
+  };
+
+  const handleStartAdd = () => {
+    resetForm();
+    setModalVisible(true);
   };
 
   const handleSave = () => {
@@ -758,14 +843,52 @@ function HomeScreen({
       }
       return;
     }
-    onAdd({
-      id: `${Date.now()}`,
-      url: normalized,
-      name: nameInput.trim() || hostnameOf(normalized),
-      category: categoryInput || "All",
-    });
+    if (editingSite) {
+      if (onEdit) {
+        onEdit({
+          ...editingSite,
+          url: normalized,
+          name: nameInput.trim() || hostnameOf(normalized),
+          category: categoryInput || "All",
+          color: colorInput || null,
+          emoji: emojiInput || null,
+        });
+      }
+    } else {
+      onAdd({
+        id: `${Date.now()}`,
+        url: normalized,
+        name: nameInput.trim() || hostnameOf(normalized),
+        category: categoryInput || "All",
+        color: colorInput || null,
+        emoji: emojiInput || null,
+        pinned: false,
+        visitCount: 0,
+        lastVisited: null,
+      });
+    }
     resetForm();
     setModalVisible(false);
+  };
+
+  const cycleSortMode = () => {
+    const modes = ["default", "most_visited", "recent", "az"];
+    const nextIdx = (modes.indexOf(sortMode) + 1) % modes.length;
+    const next = modes[nextIdx];
+    if (onSelectSortMode) onSelectSortMode(next);
+  };
+
+  const getSortLabel = (mode) => {
+    switch (mode) {
+      case "most_visited":
+        return "🔥 Visits";
+      case "recent":
+        return "🕒 Recent";
+      case "az":
+        return "🔤 A-Z";
+      default:
+        return "⇅ Sort";
+    }
   };
 
   const triggerCloudSync = async () => {
@@ -803,6 +926,8 @@ function HomeScreen({
         url: normalizeUrl(s.url) || s.url,
         name: s.name,
         category: s.category || "All",
+        color: s.color || null,
+        emoji: s.emoji || null,
         pinned: !!s.pinned,
         visitCount: s.visitCount || 0,
         lastVisited: s.lastVisited || null,
@@ -836,6 +961,20 @@ function HomeScreen({
   const pinnedSites = filteredSites.filter((s) => s.pinned);
   const unpinnedSites = filteredSites.filter((s) => !s.pinned);
 
+  // ── Apply sorting to unpinned sites ────────────────────────────
+  const sortedUnpinned = [...unpinnedSites];
+  if (sortMode === "most_visited") {
+    sortedUnpinned.sort((a, b) => (b.visitCount || 0) - (a.visitCount || 0));
+  } else if (sortMode === "recent") {
+    sortedUnpinned.sort((a, b) => {
+      const ta = typeof a.lastVisited === "number" ? a.lastVisited : (a.lastVisited ? new Date(a.lastVisited).getTime() : 0);
+      const tb = typeof b.lastVisited === "number" ? b.lastVisited : (b.lastVisited ? new Date(b.lastVisited).getTime() : 0);
+      return tb - ta;
+    });
+  } else if (sortMode === "az") {
+    sortedUnpinned.sort((a, b) => (a.name || "").localeCompare(b.name || ""));
+  }
+
   // ── Recently visited row (last 3 sites with a lastVisited, sorted desc) ─
   const recentSites = [...sites]
     .filter((s) => !!s.lastVisited)
@@ -855,10 +994,10 @@ function HomeScreen({
     listData.push({ _type: "sectionHeader", label: "⭐  Pinned", key: "__pinned_header__" });
     pinnedSites.forEach((s) => listData.push({ ...s, _type: "site" }));
   }
-  if (unpinnedSites.length > 0 && pinnedSites.length > 0) {
+  if (sortedUnpinned.length > 0 && pinnedSites.length > 0) {
     listData.push({ _type: "sectionHeader", label: "All Sites", key: "__all_header__" });
   }
-  unpinnedSites.forEach((s) => listData.push({ ...s, _type: "site" }));
+  sortedUnpinned.forEach((s) => listData.push({ ...s, _type: "site" }));
 
   const renderListItem = ({ item }) => {
     if (item._type === "recentRow") {
@@ -886,6 +1025,7 @@ function HomeScreen({
         onDelete={onDelete}
         onForgetLogin={onForgetLogin}
         onPin={onPin}
+        onEdit={handleStartEdit}
       />
     );
   };
@@ -1069,28 +1209,48 @@ function HomeScreen({
           </ScrollView>
         </View>
 
-        {/* Search / Filter Bar */}
+        {/* Search & Sort Row */}
         <View style={styles.searchBarPad}>
-          <GlassSurface theme={theme} radius={radii.lg} style={styles.searchBarGlass} highlight={false}>
-            <View style={styles.searchBarRow}>
-              <Text style={styles.searchBarIcon}>🔍</Text>
-              <TextInput
-                style={[styles.searchBarInput, { color: theme.textPrimary }]}
-                placeholder="Search saved sites…"
-                placeholderTextColor={theme.textTertiary}
-                value={searchQuery}
-                onChangeText={setSearchQuery}
-                autoCorrect={false}
-                autoCapitalize="none"
-                clearButtonMode="while-editing"
-              />
-              {searchQuery.length > 0 && (
-                <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Text style={[styles.searchClearIcon, { color: theme.textTertiary }]}>✕</Text>
-                </TouchableOpacity>
-              )}
+          <View style={styles.searchSortRow}>
+            <View style={styles.searchFlex}>
+              <GlassSurface theme={theme} radius={radii.lg} style={styles.searchBarGlass} highlight={false}>
+                <View style={styles.searchBarRow}>
+                  <Text style={styles.searchBarIcon}>🔍</Text>
+                  <TextInput
+                    style={[styles.searchBarInput, { color: theme.textPrimary }]}
+                    placeholder="Search saved sites…"
+                    placeholderTextColor={theme.textTertiary}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                    autoCorrect={false}
+                    autoCapitalize="none"
+                    clearButtonMode="while-editing"
+                  />
+                  {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery("")} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                      <Text style={[styles.searchClearIcon, { color: theme.textTertiary }]}>✕</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              </GlassSurface>
             </View>
-          </GlassSurface>
+            <TouchableOpacity
+              style={[
+                styles.sortChipBtn,
+                {
+                  backgroundColor: sortMode !== "default" ? theme.accentGlow : (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"),
+                  borderColor: sortMode !== "default" ? theme.accent : theme.glassBorder,
+                },
+              ]}
+              onPress={cycleSortMode}
+              activeOpacity={0.75}
+              accessibilityLabel="Cycle sort mode"
+            >
+              <Text style={[styles.sortChipText, { color: sortMode !== "default" ? theme.accent : theme.textSecondary }]}>
+                {getSortLabel(sortMode)}
+              </Text>
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Saved Sites List / Empty State */}
@@ -1117,7 +1277,7 @@ function HomeScreen({
                 </Text>
                 <TouchableOpacity
                   style={[styles.emptyAddBtn, theme.glowShadow]}
-                  onPress={() => setModalVisible(true)}
+                  onPress={handleStartAdd}
                   activeOpacity={0.85}
                 >
                   <LinearGradient
@@ -1179,7 +1339,7 @@ function HomeScreen({
         >
           <TouchableOpacity
             style={[styles.fabPressable, theme.glowShadow]}
-            onPress={() => setModalVisible(true)}
+            onPress={handleStartAdd}
             activeOpacity={0.88}
           >
             <LinearGradient
@@ -1455,6 +1615,49 @@ function HomeScreen({
                         </View>
                       </TouchableOpacity>
 
+                      {/* Biometric Auto-Lock Delay Selector */}
+                      {biometricEnabled && (
+                        <View style={styles.settingsSubOption}>
+                          <Text style={[styles.settingsSubOptionLabel, { color: theme.textSecondary }]}>
+                            Auto-Lock When Backgrounded:
+                          </Text>
+                          <View style={styles.autoLockRow}>
+                            {[
+                              { id: "immediate", label: "Immediate" },
+                              { id: "1min", label: "1 min" },
+                              { id: "5min", label: "5 min" },
+                              { id: "never", label: "Never" },
+                            ].map((opt) => {
+                              const isSel = autoLockTimeout === opt.id;
+                              return (
+                                <TouchableOpacity
+                                  key={opt.id}
+                                  onPress={() => onChangeAutoLockTimeout && onChangeAutoLockTimeout(opt.id)}
+                                  style={[
+                                    styles.autoLockSegmentBtn,
+                                    {
+                                      backgroundColor: isSel
+                                        ? theme.accent
+                                        : (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"),
+                                      borderColor: isSel ? theme.accent : theme.glassBorder,
+                                    },
+                                  ]}
+                                >
+                                  <Text
+                                    style={[
+                                      styles.autoLockSegmentText,
+                                      { color: isSel ? "#FFFFFF" : theme.textSecondary, fontWeight: isSel ? "700" : "500" },
+                                    ]}
+                                  >
+                                    {opt.label}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </View>
+                        </View>
+                      )}
+
                       <View style={[styles.settingsRowDivider, { backgroundColor: theme.glassBorder }]} />
 
                       {/* Clear All Sessions */}
@@ -1653,22 +1856,26 @@ function HomeScreen({
 
                 <View style={styles.modalHeaderRow}>
                   <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>
-                    Add New Portal
+                    {editingSite ? "Edit Portal" : "Add New Portal"}
                   </Text>
                   <TouchableOpacity
                     style={[
                       styles.modalCloseCircle,
                       { backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)" },
                     ]}
-                    onPress={() => setModalVisible(false)}
+                    onPress={() => {
+                      resetForm();
+                      setModalVisible(false);
+                    }}
                   >
                     <Text style={[styles.modalCloseText, { color: theme.textSecondary }]}>✕</Text>
                   </TouchableOpacity>
                 </View>
 
                 <Text style={[styles.modalDesc, { color: theme.textSecondary }]}>
-                  Paste any web URL. We will automatically fetch its high-res icon and configure a
-                  custom liquid app view with zero stale caches.
+                  {editingSite
+                    ? "Customize portal title, category, emoji icon, or custom accent color."
+                    : "Paste any web URL. We will automatically fetch its high-res icon and configure a custom liquid app view with zero stale caches."}
                 </Text>
 
                 <View
@@ -1690,7 +1897,7 @@ function HomeScreen({
                     keyboardType="url"
                     value={urlInput}
                     onChangeText={setUrlInput}
-                    autoFocus
+                    autoFocus={!editingSite}
                   />
                 </View>
 
@@ -1715,7 +1922,7 @@ function HomeScreen({
 
                 {/* Category Selection in Add Modal */}
                 <View style={styles.modalCategorySection}>
-                  <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Select Category</Text>
+                  <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Category</Text>
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modalCategoryScroll}>
                     {APP_CATEGORIES.filter(c => c !== "All").map((cat) => {
                       const isSel = categoryInput === cat;
@@ -1749,6 +1956,82 @@ function HomeScreen({
                   </ScrollView>
                 </View>
 
+                {/* Custom Emoji Picker (Optional) */}
+                <View style={styles.modalCategorySection}>
+                  <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Custom Emoji Icon (Optional)</Text>
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modalCategoryScroll}>
+                    <TouchableOpacity
+                      onPress={() => setEmojiInput("")}
+                      style={[
+                        styles.modalEmojiPill,
+                        {
+                          backgroundColor: !emojiInput ? theme.accentGlow : (theme.isDark ? "rgba(255, 255, 255, 0.07)" : "rgba(0, 0, 0, 0.05)"),
+                          borderColor: !emojiInput ? theme.accent : theme.glassBorder,
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.modalEmojiPillText, { color: !emojiInput ? theme.accent : theme.textSecondary }]}>
+                        Auto Favicon
+                      </Text>
+                    </TouchableOpacity>
+                    {PRESET_EMOJIS.map((em) => {
+                      const isSel = emojiInput === em;
+                      return (
+                        <TouchableOpacity
+                          key={em}
+                          onPress={() => setEmojiInput(isSel ? "" : em)}
+                          style={[
+                            styles.modalEmojiBtn,
+                            {
+                              backgroundColor: isSel ? theme.accentGlow : (theme.isDark ? "rgba(255, 255, 255, 0.07)" : "rgba(0, 0, 0, 0.05)"),
+                              borderColor: isSel ? theme.accent : theme.glassBorder,
+                            },
+                          ]}
+                        >
+                          <Text style={styles.modalEmojiChar}>{em}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+
+                {/* Accent Color Picker (Optional) */}
+                <View style={styles.modalCategorySection}>
+                  <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Card Accent Color (Optional)</Text>
+                  <View style={styles.modalColorRow}>
+                    <TouchableOpacity
+                      onPress={() => setColorInput("")}
+                      style={[
+                        styles.modalColorCircle,
+                        {
+                          backgroundColor: theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
+                          borderColor: !colorInput ? theme.accent : theme.glassBorder,
+                          borderWidth: !colorInput ? 2 : 1,
+                        },
+                      ]}
+                    >
+                      <Text style={{ fontSize: 10, color: theme.textSecondary, fontWeight: "700" }}>AUTO</Text>
+                    </TouchableOpacity>
+                    {PRESET_COLORS.map((c) => {
+                      const isSel = colorInput === c;
+                      return (
+                        <TouchableOpacity
+                          key={c}
+                          onPress={() => setColorInput(isSel ? "" : c)}
+                          style={[
+                            styles.modalColorCircle,
+                            {
+                              backgroundColor: c,
+                              borderColor: isSel ? "#FFFFFF" : "transparent",
+                              borderWidth: isSel ? 2.5 : 0,
+                            },
+                          ]}
+                        />
+                      );
+                    })}
+                  </View>
+                </View>
+
                 <View style={styles.modalActionRow}>
                   <TouchableOpacity
                     style={[
@@ -1779,7 +2062,9 @@ function HomeScreen({
                       end={{ x: 1, y: 1 }}
                       style={styles.modalSaveGradient}
                     >
-                      <Text style={styles.modalSaveBtnText}>Save Portal</Text>
+                      <Text style={styles.modalSaveBtnText}>
+                        {editingSite ? "Save Changes" : "Save Portal"}
+                      </Text>
                     </LinearGradient>
                   </TouchableOpacity>
                 </View>
@@ -2553,6 +2838,8 @@ export default function App() {
   const [isLocked, setIsLocked] = useState(false);
   const [biometricEnabled, setBiometricEnabled] = useState(false);
   const [updateReady, setUpdateReady] = useState(false);
+  const [sortMode, setSortMode] = useState("default");
+  const [autoLockTimeout, setAutoLockTimeout] = useState("immediate");
 
   // Theme preference
   const systemScheme = useColorScheme();
@@ -2570,6 +2857,12 @@ export default function App() {
 
         const savedTheme = await AsyncStorage.getItem(THEME_PREF_KEY);
         if (savedTheme) setThemeMode(savedTheme);
+
+        // Load sort mode and auto-lock preference
+        const savedSort = await AsyncStorage.getItem(SORT_STORAGE_KEY);
+        if (savedSort) setSortMode(savedSort);
+        const savedAutoLock = await AsyncStorage.getItem(AUTOLOCK_STORAGE_KEY);
+        if (savedAutoLock) setAutoLockTimeout(savedAutoLock);
 
         // Check biometric lock
         const bioLock = await AsyncStorage.getItem(BIOMETRIC_STORAGE_KEY);
@@ -2757,6 +3050,23 @@ export default function App() {
     return await authService.syncSitesToCloud(user, sites);
   };
 
+  // Edit an existing site (preserves all fields including color, emoji)
+  const handleEdit = (updatedSite) => {
+    persistSites(sites.map((s) => s.id === updatedSite.id ? { ...s, ...updatedSite } : s));
+  };
+
+  // Sort mode persistence
+  const handleChangeSortMode = (mode) => {
+    setSortMode(mode);
+    AsyncStorage.setItem(SORT_STORAGE_KEY, mode).catch(() => {});
+  };
+
+  // Auto-lock timeout persistence
+  const handleChangeAutoLockTimeout = async (timeout) => {
+    setAutoLockTimeout(timeout);
+    await AsyncStorage.setItem(AUTOLOCK_STORAGE_KEY, timeout).catch(() => {});
+  };
+
   // Forget Login / Clear Site Session handler
   const handleForgetLogin = async (site, webviewRef = null) => {
     const runClear = async () => {
@@ -2859,6 +3169,11 @@ export default function App() {
             onDelete={handleDelete}
             onForgetLogin={handleForgetLogin}
             onPin={handlePin}
+            onEdit={handleEdit}
+            sortMode={sortMode}
+            onSelectSortMode={handleChangeSortMode}
+            autoLockTimeout={autoLockTimeout}
+            onChangeAutoLockTimeout={handleChangeAutoLockTimeout}
             updateReady={updateReady}
             onCheckUpdates={handleCheckUpdates}
             onRestartApp={handleRestartApp}
@@ -4316,4 +4631,58 @@ const styles = StyleSheet.create({
     minHeight: 100,
     textAlignVertical: "top",
   },
+
+  // Sort Chip + Search Row
+  searchSortRow: { flexDirection: "row", alignItems: "center", gap: 8 },
+  searchFlex: { flex: 1 },
+  sortChipBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: radii.lg,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  sortChipText: { fontSize: 12.5, fontWeight: "700" },
+
+  // Settings sub-options (auto-lock)
+  settingsSubOption: { paddingTop: 8, paddingBottom: 4 },
+  settingsSubOptionLabel: { fontSize: 11.5, fontWeight: "600", marginBottom: 8 },
+  autoLockRow: { flexDirection: "row", flexWrap: "wrap", gap: 6 },
+  autoLockSegmentBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.sm,
+    borderWidth: 1,
+  },
+  autoLockSegmentText: { fontSize: 12 },
+
+  // Add/Edit modal — emoji & color pickers
+  modalEmojiPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    marginRight: 6,
+  },
+  modalEmojiPillText: { fontSize: 12, fontWeight: "600" },
+  modalEmojiBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: radii.sm,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    marginRight: 6,
+  },
+  modalEmojiChar: { fontSize: 20 },
+  modalColorRow: { flexDirection: "row", alignItems: "center", gap: 10, flexWrap: "wrap" },
+  modalColorCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  customEmojiText: { fontSize: 22 },
 });
