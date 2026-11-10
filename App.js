@@ -660,6 +660,40 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin, onEdit 
                 </View>
               </TouchableOpacity>
 
+              {/* Open in Ghost Mode (Private Ephemeral Session) */}
+              <TouchableOpacity
+                style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={() => {
+                  setShowMenu(false);
+                  onOpen(item, { isGhost: true });
+                }}
+              >
+                <Text style={styles.menuItemIcon}>👻</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: "#C084FC" }]}>Open in Ghost Mode</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>
+                    Ephemeral session — cookies & storage are auto-wiped on exit
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Read Offline Snapshot */}
+              <TouchableOpacity
+                style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={() => {
+                  setShowMenu(false);
+                  onOpen(item, { isOffline: true });
+                }}
+              >
+                <Text style={styles.menuItemIcon}>📥</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: theme.accent }]}>Read Offline Snapshot</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>
+                    Open saved offline article or cached page text
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
               {/* Edit Portal */}
               <TouchableOpacity
                 style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
@@ -2299,7 +2333,7 @@ function HomeScreen({
 // Site Screen: Persistent Logins & Cookies, Progress Bar,
 //              OAuth Auto-Assist, Bottom Dock & Deck Switcher
 // ──────────────────────────────────────────────────────────────
-function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLogin, onSwitchSite }) {
+function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLogin, onSwitchSite, isGhost = false, isOffline = false }) {
   const webviewRef = useRef(null);
   const [loading, setLoading] = useState(true);
   const [progress, setProgress] = useState(0);
@@ -2309,15 +2343,53 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
   const [reloadKey, setReloadKey] = useState(() => Date.now());
   const [isDesktop, setIsDesktop] = useState(false);
   const [adBlockEnabled, setAdBlockEnabled] = useState(true);
+  const [cookieBanishEnabled, setCookieBanishEnabled] = useState(true);
+  const [zenMode, setZenMode] = useState(false);
   const [showLoginPrompt, setShowLoginPrompt] = useState(false);
   const [loginPromptDismissed, setLoginPromptDismissed] = useState(false);
   const [detectedGoogleBtn, setDetectedGoogleBtn] = useState(false);
   const [zoomLevel, setZoomLevel] = useState(1.0);
   const [forceDark, setForceDark] = useState(false);
   const [deckSwitcherVisible, setDeckSwitcherVisible] = useState(false);
+
+  // Reader Mode state
+  const [readerActive, setReaderActive] = useState(false);
+  const [readerData, setReaderData] = useState(null);
+  const [readerFontSize, setReaderFontSize] = useState(18);
+  const [readerTheme, setReaderTheme] = useState(isDark ? "dark" : "sepia");
+
+  // Offline Snapshot state
+  const [offlineSnapshot, setOfflineSnapshot] = useState(null);
+  const [hasOfflineData, setHasOfflineData] = useState(false);
+
   const insets = useSafeAreaInsets();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const isTabletOrDesktop = windowWidth >= 640;
+
+  useEffect(() => {
+    if (isGhost) {
+      showToast("👻 Ghost Mode: Ephemeral Session (Zero-Trace)");
+    }
+  }, [isGhost]);
+
+  useEffect(() => {
+    AsyncStorage.getItem(`@mysites_offline_${site.id}`)
+      .then((raw) => {
+        if (raw) {
+          setHasOfflineData(true);
+          if (isOffline) {
+            try {
+              const parsed = JSON.parse(raw);
+              setOfflineSnapshot(parsed);
+              showToast("📥 Loaded offline snapshot");
+            } catch (e) {}
+          }
+        } else if (isOffline) {
+          showToast("ℹ️ No snapshot saved yet — loading live page");
+        }
+      })
+      .catch(() => {});
+  }, [site.id, isOffline]);
 
   // Cycle text zoom levels
   const cycleZoom = () => {
@@ -2372,6 +2444,14 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
 
   useEffect(() => {
     const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+      if (readerActive) {
+        setReaderActive(false);
+        return true;
+      }
+      if (zenMode) {
+        setZenMode(false);
+        return true;
+      }
       if (canGoBack && webviewRef.current) {
         webviewRef.current.goBack();
         return true;
@@ -2384,7 +2464,144 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
       sub.remove();
       flushCookies();
     };
-  }, [canGoBack, onBack]);
+  }, [canGoBack, onBack, readerActive, zenMode]);
+
+  const banishCookieBanners = () => {
+    if (!webviewRef.current || !cookieBanishEnabled || Platform.OS === "web") return;
+    const script = `
+      (function() {
+        try {
+          var sel = [
+            '#onetrust-banner-sdk', '#onetrust-consent-sdk', '.onetrust-pc-dark-filter',
+            '#cookie-law-info-bar', '#cookie-law-info-again', '.cc-window', '.cc-banner',
+            '.cookie-banner', '#cookie-banner', '.cookie-notice', '#cookie-notice',
+            '#gdpr-banner', '.gdpr-consent', '#cmpbox', '#cmpbox2', '.cmp-container',
+            '#CybotCookiebotDialog', '#CybotCookiebotDialogBodyUnderlay',
+            '.qc-cmp2-container', '#didomi-host', '.didomi-popup-backdrop',
+            '[id*="cookie-consent" i]', '[class*="cookie-consent" i]',
+            '[id*="cookieConsent" i]', '[class*="cookieConsent" i]',
+            '[id*="sp_message_container" i]', '[aria-label*="cookie" i]',
+            '[aria-label*="consent" i]', '.cookie-bar', '#usercentrics-root',
+            '.privacymanager', '#privacymanager'
+          ];
+          sel.forEach(function(s) {
+            document.querySelectorAll(s).forEach(function(el) {
+              el.style.setProperty('display', 'none', 'important');
+              try { el.remove(); } catch(e) {}
+            });
+          });
+          if (document.body) {
+            if (getComputedStyle(document.body).overflow === 'hidden' || document.body.style.overflow === 'hidden') {
+              document.body.style.setProperty('overflow', 'auto', 'important');
+              document.body.style.setProperty('position', 'static', 'important');
+            }
+          }
+          if (document.documentElement) {
+            if (getComputedStyle(document.documentElement).overflow === 'hidden' || document.documentElement.style.overflow === 'hidden') {
+              document.documentElement.style.setProperty('overflow', 'auto', 'important');
+            }
+          }
+        } catch (e) {}
+      })();
+      true;
+    `;
+    webviewRef.current.injectJavaScript(script);
+  };
+
+  const triggerReaderMode = () => {
+    if (!webviewRef.current || Platform.OS === "web") {
+      showToast("📖 Reader mode not available on web preview");
+      return;
+    }
+    showToast("📖 Extracting article for Reader View...");
+    const script = `
+      (function() {
+        try {
+          var title = (document.querySelector('h1') && document.querySelector('h1').innerText) || document.title || '';
+          var byline = '';
+          var bylineEl = document.querySelector('[rel="author"], .byline, .author, .entry-author, time, .published');
+          if (bylineEl) byline = bylineEl.innerText.trim();
+
+          var articleEl = document.querySelector('article') ||
+                          document.querySelector('[role="main"]') ||
+                          document.querySelector('.article-body, .article-content, .post-content, .entry-content, main');
+
+          var html = '';
+          if (articleEl) {
+            var clone = articleEl.cloneNode(true);
+            var removeSelectors = ['script', 'style', 'nav', 'header', 'footer', 'aside', '.ad', '.ads', '[class*="banner"]', '[class*="social"]', '[class*="share"]', 'button', 'form', 'iframe:not([src*="youtube"])'];
+            removeSelectors.forEach(function(s) {
+              clone.querySelectorAll(s).forEach(function(el) { el.remove(); });
+            });
+            html = clone.innerHTML;
+          } else {
+            var paras = Array.from(document.querySelectorAll('p')).filter(function(p) {
+              return p.innerText && p.innerText.trim().length > 60;
+            });
+            html = paras.map(function(p) { return '<p>' + p.innerHTML + '</p>'; }).join('');
+          }
+
+          var textContent = (articleEl ? articleEl.innerText : html.replace(/<[^>]*>/g, ' '));
+          var words = textContent.trim().split(/\\s+/).filter(Boolean).length;
+          var readTime = Math.max(1, Math.ceil(words / 220));
+
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'READER_MODE_RESULT',
+              title: title,
+              byline: byline,
+              content: html,
+              words: words,
+              readTime: readTime,
+              url: window.location.href
+            }));
+          }
+        } catch (e) {
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'READER_MODE_RESULT',
+              error: e.message
+            }));
+          }
+        }
+      })();
+      true;
+    `;
+    webviewRef.current.injectJavaScript(script);
+  };
+
+  const saveOfflineSnapshot = () => {
+    if (!webviewRef.current || Platform.OS === "web") {
+      showToast("📥 Snapshots not available on web preview");
+      return;
+    }
+    showToast("📥 Capturing snapshot...");
+    const script = `
+      (function() {
+        try {
+          var html = document.documentElement.outerHTML;
+          var title = document.title || '';
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'OFFLINE_SNAPSHOT_RESULT',
+              title: title,
+              html: html,
+              timestamp: Date.now()
+            }));
+          }
+        } catch (e) {
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({
+              type: 'OFFLINE_SNAPSHOT_RESULT',
+              error: e.message
+            }));
+          }
+        }
+      })();
+      true;
+    `;
+    webviewRef.current.injectJavaScript(script);
+  };
 
   const retry = () => {
     setHasError(false);
@@ -2498,7 +2715,7 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
 
   return (
     <View style={[styles.screenRoot, { backgroundColor: theme.background }]}>
-      <StatusBar style={isDark ? "light" : "dark"} />
+      <StatusBar style={isDark ? "light" : "dark"} hidden={zenMode} />
       <DriftingBlobs theme={theme} />
 
       {/* Main WebView Content Area */}
@@ -2551,7 +2768,7 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
               width: "100%",
               height: "100%",
               border: "none",
-              paddingTop: insets.top + 64,
+              paddingTop: zenMode ? 0 : insets.top + 64,
             }}
             onLoad={() => setLoading(false)}
           />
@@ -2559,17 +2776,22 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
           <WebView
             ref={webviewRef}
             key={reloadKey}
-            source={{ uri: targetUrl }}
-            style={[styles.webviewNative, { marginTop: insets.top + 64 }]}
+            source={
+              isOffline && offlineSnapshot?.html
+                ? { html: offlineSnapshot.html, baseUrl: site.url }
+                : { uri: targetUrl }
+            }
+            style={[styles.webviewNative, { marginTop: zenMode ? 0 : insets.top + 64 }]}
             startInLoadingState={false}
-            // 1. Persistent Login: Keep cookies, local storage & session state intact
-            cacheEnabled={true}
-            cacheMode="LOAD_DEFAULT"
-            sharedCookiesEnabled
-            thirdPartyCookiesEnabled
+            // 1. Persistent Login: Keep cookies, local storage & session state intact (ephemeral in ghost mode)
+            cacheEnabled={!isGhost}
+            incognito={isGhost}
+            cacheMode={isGhost ? "LOAD_NO_CACHE" : "LOAD_DEFAULT"}
+            sharedCookiesEnabled={!isGhost}
+            thirdPartyCookiesEnabled={!isGhost}
             domStorageEnabled
-            databaseEnabled
-            saveFormDataDisabled={false}
+            databaseEnabled={!isGhost}
+            saveFormDataDisabled={isGhost}
             // 2. User-Agent setting for Android to avoid embedded webview block
             userAgent={isDesktop ? DESKTOP_UA : (Platform.OS === "android" ? ANDROID_MOBILE_UA : undefined)}
             injectedJavaScript={`
@@ -2580,6 +2802,49 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
                     style.id = 'mysites-dark-theme-override';
                     style.textContent = '@media (prefers-color-scheme: light) { html, body { background-color: #0d1117 !important; color: #e6edf3 !important; } }';
                     document.head.appendChild(style);
+                  }
+
+                  // Cookie Banner Killer
+                  if (${cookieBanishEnabled}) {
+                    function banishCookies() {
+                      var sel = [
+                        '#onetrust-banner-sdk', '#onetrust-consent-sdk', '.onetrust-pc-dark-filter',
+                        '#cookie-law-info-bar', '#cookie-law-info-again', '.cc-window', '.cc-banner',
+                        '.cookie-banner', '#cookie-banner', '.cookie-notice', '#cookie-notice',
+                        '#gdpr-banner', '.gdpr-consent', '#cmpbox', '#cmpbox2', '.cmp-container',
+                        '#CybotCookiebotDialog', '#CybotCookiebotDialogBodyUnderlay',
+                        '.qc-cmp2-container', '#didomi-host', '.didomi-popup-backdrop',
+                        '[id*="cookie-consent" i]', '[class*="cookie-consent" i]',
+                        '[id*="cookieConsent" i]', '[class*="cookieConsent" i]',
+                        '[id*="sp_message_container" i]', '[aria-label*="cookie" i]',
+                        '[aria-label*="consent" i]', '.cookie-bar', '#usercentrics-root',
+                        '.privacymanager', '#privacymanager'
+                      ];
+                      sel.forEach(function(s) {
+                        document.querySelectorAll(s).forEach(function(el) {
+                          el.style.setProperty('display', 'none', 'important');
+                          try { el.remove(); } catch(e) {}
+                        });
+                      });
+                      if (document.body) {
+                        if (getComputedStyle(document.body).overflow === 'hidden' || document.body.style.overflow === 'hidden') {
+                          document.body.style.setProperty('overflow', 'auto', 'important');
+                          document.body.style.setProperty('position', 'static', 'important');
+                        }
+                      }
+                      if (document.documentElement) {
+                        if (getComputedStyle(document.documentElement).overflow === 'hidden' || document.documentElement.style.overflow === 'hidden') {
+                          document.documentElement.style.setProperty('overflow', 'auto', 'important');
+                        }
+                      }
+                    }
+                    banishCookies();
+                    var bCount = 0;
+                    var bTimer = setInterval(function() {
+                      banishCookies();
+                      bCount++;
+                      if (bCount > 8) clearInterval(bTimer);
+                    }, 450);
                   }
 
                   // Scan page for login / email fields or Google Sign-In buttons
@@ -2607,6 +2872,33 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
                 if (data.type === 'LOGIN_FIELD_DETECTED' && user?.email && !loginPromptDismissed) {
                   setShowLoginPrompt(true);
                   if (data.hasGoogle) setDetectedGoogleBtn(true);
+                } else if (data.type === 'READER_MODE_RESULT') {
+                  if (data.content && data.content.trim().length > 60) {
+                    setReaderData(data);
+                    setReaderActive(true);
+                    showToast("📖 Liquid Reader Mode ready");
+                  } else {
+                    showToast("📖 No article body detected on this page");
+                  }
+                } else if (data.type === 'OFFLINE_SNAPSHOT_RESULT') {
+                  if (data.html) {
+                    const payload = {
+                      title: data.title || site.name,
+                      html: data.html,
+                      savedAt: data.timestamp || Date.now(),
+                      url: site.url,
+                    };
+                    AsyncStorage.setItem(`@mysites_offline_${site.id}`, JSON.stringify(payload))
+                      .then(() => {
+                        setHasOfflineData(true);
+                        showToast("✅ Page saved offline! Read anytime from site menu");
+                      })
+                      .catch(() => {
+                        showToast("⚠️ Could not save snapshot");
+                      });
+                  } else {
+                    showToast("⚠️ Could not capture snapshot");
+                  }
                 }
               } catch (e) {}
             }}
@@ -2614,6 +2906,9 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
             onLoadEnd={() => {
               setLoading(false);
               flushCookies();
+              if (cookieBanishEnabled) {
+                banishCookieBanners();
+              }
             }}
             onLoadProgress={({ nativeEvent }) => setProgress(nativeEvent.progress)}
             onNavigationStateChange={(navState) => {
@@ -2703,266 +2998,559 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
       )}
 
       {/* Floating Translucent Liquid Glass Header */}
-      <View style={[styles.siteFloatingHeaderWrap, { top: insets.top + 8 }]}>
-        <GlassSurface
-          theme={theme}
-          radius={radii.xl}
-          intensity={theme.blurIntensityHeavy}
-          style={styles.siteHeaderGlass}
-        >
-          <View style={styles.siteHeaderRow}>
-            {/* Back Button */}
-            <TouchableOpacity
-              onPress={onBack}
-              style={[
-                styles.siteHeaderPillBtn,
-                {
-                  backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-                  borderColor: theme.glassBorder,
-                },
-              ]}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            >
-              <Text style={[styles.siteHeaderBackArrow, { color: theme.accent }]}>‹</Text>
-              <Text style={[styles.siteHeaderBackText, { color: theme.textPrimary }]}>Decks</Text>
-            </TouchableOpacity>
+      {!zenMode && (
+        <View style={[styles.siteFloatingHeaderWrap, { top: insets.top + 8 }]}>
+          <GlassSurface
+            theme={theme}
+            radius={radii.xl}
+            intensity={theme.blurIntensityHeavy}
+            style={[
+              styles.siteHeaderGlass,
+              isGhost && { borderColor: "#C084FC", borderWidth: 1.5 },
+            ]}
+          >
+            <View style={styles.siteHeaderRow}>
+              {/* Back Button */}
+              <TouchableOpacity
+                onPress={onBack}
+                style={[
+                  styles.siteHeaderPillBtn,
+                  {
+                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                    borderColor: isGhost ? "#C084FC" : theme.glassBorder,
+                  },
+                ]}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Text style={[styles.siteHeaderBackArrow, { color: isGhost ? "#C084FC" : theme.accent }]}>‹</Text>
+                <Text style={[styles.siteHeaderBackText, { color: theme.textPrimary }]}>Decks</Text>
+              </TouchableOpacity>
 
-            {/* Site Title and Host chip (tap to switch portals) */}
-            <TouchableOpacity
-              style={styles.siteHeaderTitleContainer}
-              onPress={() => setDeckSwitcherVisible(true)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.siteHeaderTitleRowFlex}>
-                <Text style={[styles.siteHeaderTitle, { color: theme.textPrimary }]} numberOfLines={1}>
-                  {site.name}
+              {/* Site Title and Host chip (tap to switch portals) */}
+              <TouchableOpacity
+                style={styles.siteHeaderTitleContainer}
+                onPress={() => setDeckSwitcherVisible(true)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.siteHeaderTitleRowFlex}>
+                  <Text style={[styles.siteHeaderTitle, { color: theme.textPrimary }]} numberOfLines={1}>
+                    {site.name}
+                  </Text>
+                  {isGhost && (
+                    <View style={styles.ghostHeaderBadge}>
+                      <Text style={styles.ghostHeaderBadgeText}>GHOST</Text>
+                    </View>
+                  )}
+                  {isOffline && offlineSnapshot && (
+                    <View style={styles.offlineHeaderBadge}>
+                      <Text style={styles.offlineHeaderBadgeText}>OFFLINE</Text>
+                    </View>
+                  )}
+                  {sites.length > 1 && (
+                    <Text style={[styles.siteHeaderChevronDown, { color: isGhost ? "#C084FC" : theme.accent }]}>▾</Text>
+                  )}
+                </View>
+                <Text style={[styles.siteHeaderHost, { color: theme.textSecondary }]} numberOfLines={1}>
+                  {hostnameOf(site.url)}
                 </Text>
-                {sites.length > 1 && (
-                  <Text style={[styles.siteHeaderChevronDown, { color: theme.accent }]}>▾</Text>
-                )}
+              </TouchableOpacity>
+
+              {/* Right Action Controls */}
+              <View style={styles.siteHeaderActions}>
+                {/* Desktop Mode Toggle */}
+                <TouchableOpacity
+                  onPress={() => {
+                    setIsDesktop((prev) => !prev);
+                    setReloadKey(Date.now());
+                  }}
+                  style={[
+                    styles.siteHeaderIconBtn,
+                    {
+                      backgroundColor: isDesktop
+                        ? (isGhost ? "#C084FC" : theme.accent)
+                        : theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                      borderColor: isDesktop ? (isGhost ? "#C084FC" : theme.accent) : theme.glassBorder,
+                    },
+                  ]}
+                  accessibilityLabel="Toggle Desktop View"
+                >
+                  <Text style={styles.siteHeaderActionIcon}>🖥️</Text>
+                </TouchableOpacity>
+
+                {/* Cookie Banner Killer Toggle */}
+                <TouchableOpacity
+                  onPress={() => {
+                    const next = !cookieBanishEnabled;
+                    setCookieBanishEnabled(next);
+                    if (next) {
+                      banishCookieBanners();
+                      showToast("🍪 Cookie Banner Killer: Active");
+                    } else {
+                      showToast("🍪 Cookie Banner Killer: Paused");
+                    }
+                  }}
+                  style={[
+                    styles.siteHeaderIconBtn,
+                    {
+                      backgroundColor: cookieBanishEnabled
+                        ? (theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)")
+                        : "rgba(239, 68, 68, 0.2)",
+                      borderColor: cookieBanishEnabled ? theme.glassBorder : "rgba(239, 68, 68, 0.4)",
+                    },
+                  ]}
+                  accessibilityLabel="Toggle Cookie Banner Killer"
+                >
+                  <Text style={styles.siteHeaderActionIcon}>{cookieBanishEnabled ? "🍪" : "🚫"}</Text>
+                </TouchableOpacity>
+
+                {/* AdBlocker Toggle */}
+                <TouchableOpacity
+                  onPress={() => {
+                    const nextState = !adBlockEnabled;
+                    setAdBlockEnabled(nextState);
+                    showToast(nextState ? "🛡️ Ad blocker enabled" : "⚠️ Ad blocker paused");
+                  }}
+                  style={[
+                    styles.siteHeaderIconBtn,
+                    {
+                      backgroundColor: adBlockEnabled
+                        ? theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"
+                        : "rgba(239, 68, 68, 0.2)",
+                      borderColor: theme.glassBorder,
+                    },
+                  ]}
+                  accessibilityLabel="Toggle Ad Blocker"
+                >
+                  <Text style={styles.siteHeaderActionIcon}>{adBlockEnabled ? "🛡️" : "⚠️"}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => onForgetLogin(site, webviewRef)}
+                  style={[
+                    styles.siteHeaderIconBtn,
+                    {
+                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                      borderColor: theme.glassBorder,
+                    },
+                  ]}
+                  accessibilityLabel="Forget Login / Clear Session"
+                >
+                  <Text style={styles.siteHeaderActionIcon}>🔒</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={retry}
+                  style={[
+                    styles.siteHeaderIconBtn,
+                    {
+                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                      borderColor: theme.glassBorder,
+                    },
+                  ]}
+                  accessibilityLabel="Force Reload"
+                >
+                  <Text style={[styles.siteHeaderActionText, { color: theme.textSecondary }]}>↻</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => {
+                    Clipboard.setString(site.url);
+                    showToast("📋 URL copied to clipboard");
+                  }}
+                  style={[
+                    styles.siteHeaderIconBtn,
+                    {
+                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                      borderColor: theme.glassBorder,
+                    },
+                  ]}
+                  accessibilityLabel="Copy URL to clipboard"
+                >
+                  <Text style={styles.siteHeaderActionIcon}>📋</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  onPress={() => Linking.openURL(site.url)}
+                  style={[
+                    styles.siteHeaderIconBtn,
+                    {
+                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
+                      borderColor: theme.glassBorder,
+                    },
+                  ]}
+                  accessibilityLabel="Open in system browser"
+                >
+                  <Text style={[styles.siteHeaderActionText, { color: isGhost ? "#C084FC" : theme.accent }]}>↗</Text>
+                </TouchableOpacity>
               </View>
-              <Text style={[styles.siteHeaderHost, { color: theme.textSecondary }]} numberOfLines={1}>
-                {hostnameOf(site.url)}
-              </Text>
-            </TouchableOpacity>
+            </View>
 
-            {/* Right Action Controls: Forget Login, Refresh, External link */}
-            <View style={styles.siteHeaderActions}>
-              {/* Desktop Mode Toggle */}
+            {/* Liquid Glass Progress Bar */}
+            {config.showProgressBar && loading && !hasError && (
+              <View style={styles.progressTrack}>
+                <Animated.View style={[styles.progressBarAnimated, progressBarStyle]}>
+                  <LinearGradient
+                    colors={isGhost ? ["#C084FC", "#9333EA"] : theme.accentGradient}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={StyleSheet.absoluteFillObject}
+                  />
+                </Animated.View>
+              </View>
+            )}
+          </GlassSurface>
+        </View>
+      )}
+
+      {/* VisionOS Floating Bottom Navigation Dock */}
+      {!zenMode && (
+        <View style={[styles.siteBottomDockWrap, { bottom: Math.max(insets.bottom, 12) + 6 }]}>
+          <GlassSurface
+            theme={theme}
+            radius={radii.pill}
+            intensity={theme.blurIntensityHeavy}
+            style={[
+              styles.siteBottomDockGlass,
+              isGhost && { borderColor: "#C084FC", borderWidth: 1.5 },
+            ]}
+          >
+            <View style={styles.siteBottomDockRow}>
+              {/* Back in History */}
               <TouchableOpacity
+                style={[styles.dockBtn, !canGoBack && styles.dockBtnDisabled]}
+                onPress={() => canGoBack && webviewRef.current?.goBack()}
+                disabled={!canGoBack}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Back in page history"
+              >
+                <Text style={[styles.dockBtnText, { color: canGoBack ? theme.textPrimary : theme.textTertiary }]}>
+                  ‹
+                </Text>
+              </TouchableOpacity>
+
+              {/* Forward in History */}
+              <TouchableOpacity
+                style={[styles.dockBtn, !canGoForward && styles.dockBtnDisabled]}
+                onPress={() => canGoForward && webviewRef.current?.goForward()}
+                disabled={!canGoForward}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Forward in page history"
+              >
+                <Text style={[styles.dockBtnText, { color: canGoForward ? theme.textPrimary : theme.textTertiary }]}>
+                  ›
+                </Text>
+              </TouchableOpacity>
+
+              <View style={[styles.dockDivider, { backgroundColor: theme.glassBorder }]} />
+
+              {/* Liquid Reader Mode */}
+              <TouchableOpacity
+                style={styles.dockBtn}
+                onPress={triggerReaderMode}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Open Liquid Reader Mode"
+              >
+                <Text style={styles.dockBtnIcon}>📖</Text>
+              </TouchableOpacity>
+
+              {/* Save Offline Snapshot */}
+              <TouchableOpacity
+                style={styles.dockBtn}
+                onPress={saveOfflineSnapshot}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Save page offline"
+              >
+                <Text style={styles.dockBtnIcon}>📥</Text>
+              </TouchableOpacity>
+
+              {/* Zen Fullscreen Mode */}
+              <TouchableOpacity
+                style={styles.dockBtn}
                 onPress={() => {
-                  setIsDesktop((prev) => !prev);
-                  setReloadKey(Date.now());
+                  setZenMode(true);
+                  showToast("🧘 Zen Fullscreen: Tap bottom pill to exit");
                 }}
-                style={[
-                  styles.siteHeaderIconBtn,
-                  {
-                    backgroundColor: isDesktop
-                      ? theme.accent
-                      : theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-                    borderColor: isDesktop ? theme.accent : theme.glassBorder,
-                  },
-                ]}
-                accessibilityLabel="Toggle Desktop View"
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Enter Zen Fullscreen Mode"
               >
-                <Text style={styles.siteHeaderActionIcon}>🖥️</Text>
+                <Text style={styles.dockBtnIcon}>🧘</Text>
               </TouchableOpacity>
 
-              {/* AdBlocker Toggle */}
+              {/* Force Dark Mode Toggle */}
               <TouchableOpacity
-                onPress={() => {
-                  const nextState = !adBlockEnabled;
-                  setAdBlockEnabled(nextState);
-                  Alert.alert("Ad Blocker", nextState ? "Ad blocker enabled." : "Ad blocker paused.");
-                }}
                 style={[
-                  styles.siteHeaderIconBtn,
-                  {
-                    backgroundColor: adBlockEnabled
-                      ? theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)"
-                      : "rgba(239, 68, 68, 0.2)",
-                    borderColor: theme.glassBorder,
-                  },
+                  styles.dockBtn,
+                  forceDark && { backgroundColor: theme.accentGlow },
                 ]}
-                accessibilityLabel="Toggle Ad Blocker"
+                onPress={() => setForceDark((prev) => !prev)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Force high-contrast dark mode"
               >
-                <Text style={styles.siteHeaderActionIcon}>{adBlockEnabled ? "🛡️" : "⚠️"}</Text>
+                <Text style={styles.dockBtnIcon}>{forceDark ? "🌙" : "☀️"}</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                onPress={() => onForgetLogin(site, webviewRef)}
-                style={[
-                  styles.siteHeaderIconBtn,
-                  {
-                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-                    borderColor: theme.glassBorder,
-                  },
-                ]}
-                accessibilityLabel="Forget Login / Clear Session"
-              >
-                <Text style={styles.siteHeaderActionIcon}>🔒</Text>
-              </TouchableOpacity>
+              <View style={[styles.dockDivider, { backgroundColor: theme.glassBorder }]} />
 
+              {/* Home Portal Button */}
               <TouchableOpacity
-                onPress={retry}
                 style={[
-                  styles.siteHeaderIconBtn,
-                  {
-                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-                    borderColor: theme.glassBorder,
-                  },
+                  styles.dockBtnHome,
+                  { backgroundColor: isGhost ? "rgba(192, 132, 252, 0.25)" : theme.accentGlow },
                 ]}
-                accessibilityLabel="Force Reload"
+                onPress={onBack}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityLabel="Return to Decks"
               >
-                <Text style={[styles.siteHeaderActionText, { color: theme.textSecondary }]}>↻</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => {
-                  Clipboard.setString(site.url);
-                  Alert.alert("Copied!", `${site.url} copied to clipboard.`);
-                }}
-                style={[
-                  styles.siteHeaderIconBtn,
-                  {
-                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-                    borderColor: theme.glassBorder,
-                  },
-                ]}
-                accessibilityLabel="Copy URL to clipboard"
-              >
-                <Text style={styles.siteHeaderActionIcon}>📋</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                onPress={() => Linking.openURL(site.url)}
-                style={[
-                  styles.siteHeaderIconBtn,
-                  {
-                    backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.04)",
-                    borderColor: theme.glassBorder,
-                  },
-                ]}
-                accessibilityLabel="Open in system browser"
-              >
-                <Text style={[styles.siteHeaderActionText, { color: theme.accent }]}>↗</Text>
+                <Text style={[styles.dockBtnIcon, { color: isGhost ? "#C084FC" : theme.accent }]}>🏠</Text>
               </TouchableOpacity>
             </View>
-          </View>
+          </GlassSurface>
+        </View>
+      )}
 
-          {/* Liquid Glass Progress Bar — smoothly animated via Reanimated */}
-          {config.showProgressBar && loading && !hasError && (
-            <View style={styles.progressTrack}>
-              <Animated.View style={[styles.progressBarAnimated, progressBarStyle]}>
-                <LinearGradient
-                  colors={theme.accentGradient}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 0 }}
-                  style={StyleSheet.absoluteFillObject}
-                />
-              </Animated.View>
-            </View>
-          )}
-        </GlassSurface>
-      </View>
-
-      {/* VisionOS Floating Bottom Navigation Dock (Arc / Safari Style) */}
-      <View style={[styles.siteBottomDockWrap, { bottom: Math.max(insets.bottom, 12) + 6 }]}>
-        <GlassSurface
-          theme={theme}
-          radius={radii.pill}
-          intensity={theme.blurIntensityHeavy}
-          style={styles.siteBottomDockGlass}
+      {/* Zen Fullscreen Floating Exit Pill */}
+      {zenMode && (
+        <Animated.View
+          entering={FadeIn.duration(260)}
+          exiting={FadeOut.duration(200)}
+          style={[styles.zenPillWrap, { bottom: Math.max(insets.bottom, 16) + 12 }]}
         >
-          <View style={styles.siteBottomDockRow}>
-            {/* Back in History */}
+          <TouchableOpacity
+            style={[
+              styles.zenPillBtn,
+              {
+                backgroundColor: theme.isDark ? "rgba(15, 23, 42, 0.90)" : "rgba(255, 255, 255, 0.92)",
+                borderColor: isGhost ? "#C084FC" : theme.accent,
+              },
+            ]}
+            onPress={() => {
+              setZenMode(false);
+              showToast("🧘 Zen Fullscreen exited");
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.zenPillText, { color: isGhost ? "#C084FC" : theme.accent }]}>
+              🧘 Zen Fullscreen • Tap to restore controls
+            </Text>
+          </TouchableOpacity>
+        </Animated.View>
+      )}
+
+      {/* Liquid Reader Mode Fullscreen Modal */}
+      <Modal
+        visible={readerActive}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setReaderActive(false)}
+      >
+        <View
+          style={[
+            styles.readerContainer,
+            {
+              backgroundColor:
+                readerTheme === "dark"
+                  ? "#121316"
+                  : readerTheme === "sepia"
+                  ? "#F5EEDC"
+                  : "#FFFFFF",
+            },
+          ]}
+        >
+          <StatusBar style={readerTheme === "dark" ? "light" : "dark"} />
+          {/* Reader Mode Top Bar */}
+          <View
+            style={[
+              styles.readerHeader,
+              {
+                paddingTop: insets.top + 10,
+                borderBottomColor:
+                  readerTheme === "dark"
+                    ? "rgba(255,255,255,0.08)"
+                    : readerTheme === "sepia"
+                    ? "rgba(67,52,34,0.12)"
+                    : "rgba(0,0,0,0.08)",
+              },
+            ]}
+          >
             <TouchableOpacity
-              style={[styles.dockBtn, !canGoBack && styles.dockBtnDisabled]}
-              onPress={() => canGoBack && webviewRef.current?.goBack()}
-              disabled={!canGoBack}
+              style={styles.readerBackBtn}
+              onPress={() => setReaderActive(false)}
               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Back in page history"
             >
-              <Text style={[styles.dockBtnText, { color: canGoBack ? theme.textPrimary : theme.textTertiary }]}>
-                ‹
+              <Text
+                style={[
+                  styles.readerBackText,
+                  { color: readerTheme === "dark" ? "#60A5FA" : "#D97706" },
+                ]}
+              >
+                ‹ Close Reader
               </Text>
             </TouchableOpacity>
 
-            {/* Forward in History */}
-            <TouchableOpacity
-              style={[styles.dockBtn, !canGoForward && styles.dockBtnDisabled]}
-              onPress={() => canGoForward && webviewRef.current?.goForward()}
-              disabled={!canGoForward}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Forward in page history"
-            >
-              <Text style={[styles.dockBtnText, { color: canGoForward ? theme.textPrimary : theme.textTertiary }]}>
-                ›
-              </Text>
-            </TouchableOpacity>
+            <View style={styles.readerControlsRow}>
+              {/* Font Size A- / A+ */}
+              <TouchableOpacity
+                style={styles.readerControlBtn}
+                onPress={() => setReaderFontSize((prev) => Math.max(14, prev - 2))}
+              >
+                <Text
+                  style={[
+                    styles.readerControlText,
+                    { color: readerTheme === "dark" ? "#E2E8F0" : "#334155", fontSize: 13 },
+                  ]}
+                >
+                  A-
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.readerControlBtn}
+                onPress={() => setReaderFontSize((prev) => Math.min(28, prev + 2))}
+              >
+                <Text
+                  style={[
+                    styles.readerControlText,
+                    { color: readerTheme === "dark" ? "#E2E8F0" : "#334155", fontSize: 17, fontWeight: "bold" },
+                  ]}
+                >
+                  A+
+                </Text>
+              </TouchableOpacity>
 
-            <View style={[styles.dockDivider, { backgroundColor: theme.glassBorder }]} />
+              {/* Theme Switchers: Light / Sepia / Dark */}
+              <TouchableOpacity
+                style={[
+                  styles.readerThemePill,
+                  readerTheme === "light" && styles.readerThemePillActive,
+                  { backgroundColor: "#FFFFFF", borderColor: "#CBD5E1" },
+                ]}
+                onPress={() => setReaderTheme("light")}
+              >
+                <Text style={{ fontSize: 11 }}>☀️</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.readerThemePill,
+                  readerTheme === "sepia" && styles.readerThemePillActive,
+                  { backgroundColor: "#F5EEDC", borderColor: "#D4B483" },
+                ]}
+                onPress={() => setReaderTheme("sepia")}
+              >
+                <Text style={{ fontSize: 11 }}>📜</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.readerThemePill,
+                  readerTheme === "dark" && styles.readerThemePillActive,
+                  { backgroundColor: "#1E293B", borderColor: "#475569" },
+                ]}
+                onPress={() => setReaderTheme("dark")}
+              >
+                <Text style={{ fontSize: 11 }}>🌙</Text>
+              </TouchableOpacity>
 
-            {/* Text Zoom Control */}
-            <TouchableOpacity
-              style={[
-                styles.dockPillBtn,
-                zoomLevel !== 1.0 && { backgroundColor: theme.accentGlow },
-              ]}
-              onPress={cycleZoom}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Adjust text zoom"
-            >
-              <Text style={[styles.dockPillText, { color: zoomLevel !== 1.0 ? theme.accent : theme.textSecondary }]}>
-                {zoomLevel === 1.0 ? "100%" : `${Math.round(zoomLevel * 100)}%`}
-              </Text>
-            </TouchableOpacity>
-
-            {/* Force Dark Mode Toggle */}
-            <TouchableOpacity
-              style={[
-                styles.dockPillBtn,
-                forceDark && { backgroundColor: theme.accentGlow },
-              ]}
-              onPress={() => setForceDark((prev) => !prev)}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Force high-contrast dark mode"
-            >
-              <Text style={[styles.dockPillText, { color: forceDark ? theme.accent : theme.textSecondary }]}>
-                {forceDark ? "🌙 Dark" : "☀️ Page"}
-              </Text>
-            </TouchableOpacity>
-
-            <View style={[styles.dockDivider, { backgroundColor: theme.glassBorder }]} />
-
-            {/* Share Page */}
-            <TouchableOpacity
-              style={styles.dockBtn}
-              onPress={() => {
-                Share.share({
-                  title: site.name,
-                  message: `${site.name} - ${site.url}`,
-                  url: site.url,
-                }).catch(() => {});
-              }}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Share site"
-            >
-              <Text style={[styles.dockBtnIcon, { color: theme.textSecondary }]}>↗</Text>
-            </TouchableOpacity>
-
-            {/* Home Portal Button */}
-            <TouchableOpacity
-              style={[styles.dockBtnHome, { backgroundColor: theme.accentGlow }]}
-              onPress={onBack}
-              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-              accessibilityLabel="Return to Decks"
-            >
-              <Text style={[styles.dockBtnIcon, { color: theme.accent }]}>🏠</Text>
-            </TouchableOpacity>
+              {/* Save Offline from Reader */}
+              <TouchableOpacity
+                style={[
+                  styles.readerSaveBtn,
+                  { backgroundColor: readerTheme === "dark" ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)" },
+                ]}
+                onPress={() => {
+                  if (readerData) {
+                    const payload = {
+                      title: readerData.title || site.name,
+                      html: `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>${readerData.title || site.name}</title></head><body><h1>${readerData.title || ''}</h1><p><em>${readerData.byline || ''}</em></p>${readerData.content || ''}</body></html>`,
+                      savedAt: Date.now(),
+                      url: site.url,
+                    };
+                    AsyncStorage.setItem(`@mysites_offline_${site.id}`, JSON.stringify(payload))
+                      .then(() => {
+                        setHasOfflineData(true);
+                        showToast("✅ Saved article for offline reading!");
+                      })
+                      .catch(() => {});
+                  }
+                }}
+              >
+                <Text style={styles.readerSaveBtnText}>📥</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </GlassSurface>
-      </View>
+
+          {/* Reader WebView Body */}
+          {readerData && WebView && (
+            <WebView
+              originWhitelist={["*"]}
+              source={{
+                html: `
+                  <!DOCTYPE html>
+                  <html>
+                    <head>
+                      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+                      <style>
+                        * { box-sizing: border-box; }
+                        body {
+                          background-color: ${readerTheme === "dark" ? "#121316" : readerTheme === "sepia" ? "#F5EEDC" : "#FFFFFF"};
+                          color: ${readerTheme === "dark" ? "#E2E8F0" : readerTheme === "sepia" ? "#3D2E1E" : "#1A202C"};
+                          font-family: -apple-system, BlinkMacSystemFont, "Charter", "Georgia", "Merriweather", serif;
+                          font-size: ${readerFontSize}px;
+                          line-height: 1.74;
+                          padding: 24px 20px 80px 20px;
+                          margin: 0;
+                        }
+                        h1 {
+                          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                          font-size: ${Math.round(readerFontSize * 1.55)}px;
+                          line-height: 1.25;
+                          font-weight: 700;
+                          margin-bottom: 12px;
+                        }
+                        .byline {
+                          color: ${readerTheme === "dark" ? "#94A3B8" : readerTheme === "sepia" ? "#78644A" : "#64748B"};
+                          font-size: ${Math.round(readerFontSize * 0.82)}px;
+                          margin-bottom: 24px;
+                          padding-bottom: 14px;
+                          border-bottom: 1px solid ${readerTheme === "dark" ? "rgba(255,255,255,0.1)" : readerTheme === "sepia" ? "rgba(67,52,34,0.15)" : "rgba(0,0,0,0.08)"};
+                          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                        }
+                        img {
+                          max-width: 100%;
+                          height: auto;
+                          border-radius: 12px;
+                          margin: 18px 0;
+                        }
+                        p { margin: 1.15em 0; }
+                        blockquote {
+                          border-left: 3px solid ${readerTheme === "dark" ? "#60A5FA" : "#D97706"};
+                          padding-left: 14px;
+                          margin: 18px 0;
+                          font-style: italic;
+                          color: ${readerTheme === "dark" ? "#94A3B8" : readerTheme === "sepia" ? "#78644A" : "#64748B"};
+                        }
+                        pre, code {
+                          font-family: monospace;
+                          background: ${readerTheme === "dark" ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)"};
+                          padding: 2px 6px;
+                          border-radius: 4px;
+                          font-size: ${Math.round(readerFontSize * 0.88)}px;
+                        }
+                        pre { padding: 12px; overflow-x: auto; }
+                      </style>
+                    </head>
+                    <body>
+                      <h1>${readerData.title || ''}</h1>
+                      ${readerData.byline || readerData.readTime ? `<div class="byline">${readerData.byline ? readerData.byline + ' • ' : ''}${readerData.readTime || 1} min read</div>` : ''}
+                      <div class="content">
+                        ${readerData.content || ''}
+                      </div>
+                    </body>
+                  </html>
+                `,
+              }}
+              style={{ flex: 1, backgroundColor: "transparent" }}
+            />
+          )}
+        </View>
+      </Modal>
 
       {/* Quick Deck Switcher Modal */}
       <Modal
@@ -3063,6 +3651,7 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
 export default function App() {
   const [sites, setSites] = useState([]);
   const [activeSite, setActiveSite] = useState(null);
+  const [activeSiteOptions, setActiveSiteOptions] = useState({});
   const [ready, setReady] = useState(false);
   const [user, setUser] = useState(null);
   const [isLocked, setIsLocked] = useState(false);
@@ -3229,7 +3818,7 @@ export default function App() {
   };
 
   // Open a site — increment visitCount + set lastVisited before navigating
-  const handleOpen = (item) => {
+  const handleOpen = (item, options = {}) => {
     const now = Date.now();
     const updated = sites.map((s) =>
       s.id === item.id
@@ -3239,6 +3828,7 @@ export default function App() {
     persistSites(updated);
     // Use the freshly updated version of the site for SiteScreen
     const fresh = updated.find((s) => s.id === item.id) || item;
+    setActiveSiteOptions(options || {});
     setActiveSite(fresh);
   };
 
@@ -3396,13 +3986,19 @@ export default function App() {
         ) : activeSite ? (
           <SiteScreen
             site={activeSite}
+            isGhost={!!activeSiteOptions?.isGhost}
+            isOffline={!!activeSiteOptions?.isOffline}
             sites={sites}
             theme={theme}
             isDark={isDark}
             user={user}
             onBack={() => {
               flushCookies();
+              if (activeSiteOptions?.isGhost) {
+                showToast("👻 Ghost session wiped clean");
+              }
               setActiveSite(null);
+              setActiveSiteOptions({});
             }}
             onForgetLogin={handleForgetLogin}
             onSwitchSite={(newSite) => {
@@ -5332,5 +5928,120 @@ const styles = StyleSheet.create({
   noResultsAddBtnText: {
     fontSize: 13.5,
     fontWeight: "700",
+  },
+
+  // ── Ghost Mode & Offline Badges ─────────────────────────────
+  ghostHeaderBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radii.pill,
+    backgroundColor: "rgba(192, 132, 252, 0.22)",
+    borderWidth: 1,
+    borderColor: "#C084FC",
+    marginLeft: 6,
+  },
+  ghostHeaderBadgeText: {
+    fontSize: 9.5,
+    fontWeight: "800",
+    color: "#C084FC",
+    letterSpacing: 0.6,
+  },
+  offlineHeaderBadge: {
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radii.pill,
+    backgroundColor: "rgba(59, 130, 246, 0.22)",
+    borderWidth: 1,
+    borderColor: "#3B82F6",
+    marginLeft: 6,
+  },
+  offlineHeaderBadgeText: {
+    fontSize: 9.5,
+    fontWeight: "800",
+    color: "#3B82F6",
+    letterSpacing: 0.6,
+  },
+
+  // ── Zen Fullscreen Floating Pill ────────────────────────────
+  zenPillWrap: {
+    position: "absolute",
+    left: 0,
+    right: 0,
+    alignItems: "center",
+    zIndex: 1000,
+  },
+  zenPillBtn: {
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: radii.pill,
+    borderWidth: 1.5,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 8,
+  },
+  zenPillText: {
+    fontSize: 13,
+    fontWeight: "750",
+    letterSpacing: 0.3,
+  },
+
+  // ── Liquid Reader Mode Styles ───────────────────────────────
+  readerContainer: {
+    flex: 1,
+  },
+  readerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  readerBackBtn: {
+    paddingVertical: 6,
+    paddingRight: 10,
+  },
+  readerBackText: {
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  readerControlsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+  },
+  readerControlBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(128,128,128,0.14)",
+  },
+  readerControlText: {
+    fontWeight: "700",
+  },
+  readerThemePill: {
+    width: 28,
+    height: 28,
+    borderRadius: radii.pill,
+    borderWidth: 1.5,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  readerThemePillActive: {
+    transform: [{ scale: 1.15 }],
+  },
+  readerSaveBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: radii.pill,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  readerSaveBtnText: {
+    fontSize: 16,
   },
 });
