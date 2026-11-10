@@ -78,6 +78,16 @@ const AD_BLOCK_DOMAINS = [
   "popads.net"
 ];
 const APP_CATEGORIES = ["All", "Work", "Social", "Dev", "Media", "Finance"];
+
+/** Emoji icon and display label per category */
+const CATEGORY_META = {
+  All:     { emoji: "🌐", label: "All" },
+  Work:    { emoji: "💼", label: "Work" },
+  Social:  { emoji: "💬", label: "Social" },
+  Dev:     { emoji: "💻", label: "Dev" },
+  Media:   { emoji: "🎬", label: "Media" },
+  Finance: { emoji: "💰", label: "Finance" },
+};
 const BIOMETRIC_STORAGE_KEY = "user_biometric_lock_v1";
 const AUTOLOCK_STORAGE_KEY = "user_autolock_timeout_v2";
 const SORT_STORAGE_KEY = "portal_sort_mode_v1";
@@ -161,6 +171,55 @@ function getTimeAgo(isoTs) {
   const diffWk = Math.floor(diffDay / 7);
   if (diffWk === 1) return "1 week ago";
   return `${diffWk} weeks ago`;
+}
+
+// ──────────────────────────────────────────────────────────────
+// Toast Notification System (non-blocking, auto-dismisses)
+// ──────────────────────────────────────────────────────────────
+let _toastRef = null;
+
+/** Call showToast("message") from anywhere to show a brief bottom toast */
+function showToast(msg, duration = 2200) {
+  if (_toastRef && _toastRef.show) {
+    _toastRef.show(msg, duration);
+  }
+}
+
+function ToastHost({ theme }) {
+  const [toastMsg, setToastMsg] = useState(null);
+  const opacity = useSharedValue(0);
+  const translateY = useSharedValue(20);
+
+  useEffect(() => {
+    _toastRef = {
+      show: (msg, dur = 2200) => {
+        setToastMsg(msg);
+        opacity.value = withTiming(1, { duration: 220 });
+        translateY.value = withSpring(0, { damping: 18, stiffness: 320 });
+        const t = setTimeout(() => {
+          opacity.value = withTiming(0, { duration: 300 });
+          translateY.value = withTiming(20, { duration: 300 });
+          setTimeout(() => setToastMsg(null), 310);
+        }, dur);
+        return () => clearTimeout(t);
+      },
+    };
+    return () => { _toastRef = null; };
+  }, [opacity, translateY]);
+
+  const toastStyle = useAnimatedStyle(() => ({
+    opacity: opacity.value,
+    transform: [{ translateY: translateY.value }],
+  }));
+
+  if (!toastMsg) return null;
+  return (
+    <Animated.View style={[styles.toastContainer, toastStyle]} pointerEvents="none">
+      <BlurView intensity={40} tint={theme.blurTint} style={styles.toastBlur}>
+        <Text style={[styles.toastText, { color: theme.textPrimary }]}>{toastMsg}</Text>
+      </BlurView>
+    </Animated.View>
+  );
 }
 
 // ──────────────────────────────────────────────────────────────
@@ -631,13 +690,30 @@ function SiteTile({ item, theme, onOpen, onDelete, onForgetLogin, onPin, onEdit 
                 onPress={() => {
                   setShowMenu(false);
                   Clipboard.setString(item.url);
-                  Alert.alert("Copied!", `${item.url} copied to clipboard.`);
+                  showToast(`📋 Copied: ${hostnameOf(item.url)}`);
                 }}
               >
                 <Text style={styles.menuItemIcon}>📋</Text>
                 <View>
                   <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Copy Link</Text>
                   <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>Copy this site's URL to clipboard</Text>
+                </View>
+              </TouchableOpacity>
+
+              {/* Open in External Browser */}
+              <TouchableOpacity
+                style={[styles.menuItem, { borderBottomColor: theme.glassBorder, borderBottomWidth: StyleSheet.hairlineWidth }]}
+                onPress={() => {
+                  setShowMenu(false);
+                  Linking.openURL(item.url).catch(() =>
+                    showToast("⚠️ Could not open browser")
+                  );
+                }}
+              >
+                <Text style={styles.menuItemIcon}>🔗</Text>
+                <View>
+                  <Text style={[styles.menuItemText, { color: theme.textPrimary }]}>Open in Browser</Text>
+                  <Text style={[styles.menuItemDesc, { color: theme.textTertiary }]}>Opens in your default system browser</Text>
                 </View>
               </TouchableOpacity>
 
@@ -832,6 +908,13 @@ function HomeScreen({
 
   const handleStartAdd = () => {
     resetForm();
+    // Auto-paste URL from clipboard if it looks valid
+    Clipboard.getString().then((clip) => {
+      if (clip && normalizeUrl(clip.trim())) {
+        setUrlInput(clip.trim());
+        showToast("📋 URL pasted from clipboard");
+      }
+    }).catch(() => {});
     setModalVisible(true);
   };
 
@@ -1033,6 +1116,8 @@ function HomeScreen({
   return (
     <View style={styles.screenRoot}>
       <DriftingBlobs theme={theme} />
+      {/* Global toast host — renders above all content */}
+      <ToastHost theme={theme} />
 
       <SafeAreaView style={styles.safeContainer} edges={["top", "left", "right"]}>
         <StatusBar style={isDark ? "light" : "dark"} />
@@ -1173,11 +1258,13 @@ function HomeScreen({
           </View>
         )}
 
-        {/* Category Horizontal Pills */}
+        {/* Category Horizontal Pills with emoji + site count */}
         <View style={styles.categoryBarPad}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.categoryBarContent}>
             {APP_CATEGORIES.map((cat) => {
               const isSelected = selectedCategory === cat;
+              const meta = CATEGORY_META[cat] || { emoji: "🌐", label: cat };
+              const catCount = cat === "All" ? sites.length : sites.filter((s) => s.category === cat).length;
               return (
                 <TouchableOpacity
                   key={cat}
@@ -1195,14 +1282,20 @@ function HomeScreen({
                   ]}
                   activeOpacity={0.8}
                 >
+                  <Text style={styles.categoryPillEmoji}>{meta.emoji}</Text>
                   <Text
                     style={[
                       styles.categoryPillText,
                       { color: isSelected ? "#FFFFFF" : theme.textSecondary, fontWeight: isSelected ? "700" : "500" },
                     ]}
                   >
-                    {cat}
+                    {meta.label}
                   </Text>
+                  {catCount > 0 && (
+                    <View style={[styles.categoryPillBadge, { backgroundColor: isSelected ? "rgba(255,255,255,0.3)" : (theme.isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)") }]}>
+                      <Text style={[styles.categoryPillBadgeText, { color: isSelected ? "#fff" : theme.textTertiary }]}>{catCount}</Text>
+                    </View>
+                  )}
                 </TouchableOpacity>
               );
             })}
@@ -1302,7 +1395,7 @@ function HomeScreen({
             </GlassSurface>
           </View>
         ) : filteredSites.length === 0 && lowerQuery ? (
-          /* No results card */
+          /* No results card — with Add CTA */
           <View style={styles.noResultsWrap}>
             <GlassSurface theme={theme} radius={radii.xl} style={styles.noResultsGlass}>
               <Text style={styles.noResultsEmoji}>🔍</Text>
@@ -1310,6 +1403,30 @@ function HomeScreen({
               <Text style={[styles.noResultsSub, { color: theme.textSecondary }]}>
                 No saved sites match "{searchQuery}"
               </Text>
+              {/* Smart CTA: if query looks like a URL, pre-fill and open Add modal */}
+              <TouchableOpacity
+                style={[styles.noResultsAddBtn, { backgroundColor: theme.accentGlow, borderColor: theme.accent }]}
+                onPress={() => {
+                  const maybeUrl = normalizeUrl(searchQuery);
+                  if (maybeUrl) {
+                    setUrlInput(searchQuery);
+                    setNameInput("");
+                  } else {
+                    setUrlInput("");
+                    setNameInput(searchQuery);
+                  }
+                  setColorInput("");
+                  setEmojiInput("");
+                  setCategoryInput("All");
+                  setEditingSite(null);
+                  setModalVisible(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={[styles.noResultsAddBtnText, { color: theme.accent }]}>
+                  ＋ Add "{searchQuery}" as a site
+                </Text>
+              </TouchableOpacity>
             </GlassSurface>
           </View>
         ) : (
@@ -1926,6 +2043,7 @@ function HomeScreen({
                   <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modalCategoryScroll}>
                     {APP_CATEGORIES.filter(c => c !== "All").map((cat) => {
                       const isSel = categoryInput === cat;
+                      const meta = CATEGORY_META[cat] || { emoji: "🌐" };
                       return (
                         <TouchableOpacity
                           key={cat}
@@ -1942,6 +2060,7 @@ function HomeScreen({
                             },
                           ]}
                         >
+                          <Text style={styles.categoryPillEmoji}>{meta.emoji}</Text>
                           <Text
                             style={[
                               styles.modalCategoryPillText,
@@ -4968,5 +5087,60 @@ const styles = StyleSheet.create({
   accountPickerCancelText: {
     fontSize: 14,
     fontWeight: "600",
+  },
+
+  // ── Toast Notification ───────────────────────────────────────
+  toastContainer: {
+    position: "absolute",
+    bottom: 110,
+    left: 24,
+    right: 24,
+    alignItems: "center",
+    zIndex: 9999,
+    pointerEvents: "none",
+  },
+  toastBlur: {
+    paddingHorizontal: 20,
+    paddingVertical: 11,
+    borderRadius: radii.pill,
+    overflow: "hidden",
+  },
+  toastText: {
+    fontSize: 14,
+    fontWeight: "600",
+    textAlign: "center",
+  },
+
+  // ── Category pill emoji + count badge ───────────────────────
+  categoryPillEmoji: {
+    fontSize: 13,
+    marginRight: 4,
+  },
+  categoryPillBadge: {
+    marginLeft: 5,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  categoryPillBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+  },
+
+  // ── No-results Add CTA ───────────────────────────────────────
+  noResultsAddBtn: {
+    marginTop: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+    borderRadius: radii.pill,
+    borderWidth: 1,
+    alignSelf: "center",
+  },
+  noResultsAddBtnText: {
+    fontSize: 13.5,
+    fontWeight: "700",
   },
 });
