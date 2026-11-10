@@ -10,6 +10,7 @@ import {
   TextInput,
   Image,
   Dimensions,
+  useWindowDimensions,
   useColorScheme,
   BackHandler,
   Linking,
@@ -226,31 +227,35 @@ function ToastHost({ theme }) {
 // Liquid Glass Background: Animated drifting mesh blobs & watermark
 // ──────────────────────────────────────────────────────────────
 function DriftingBlobs({ theme }) {
-  const blob1X = useSharedValue(SCREEN_WIDTH * 0.15);
-  const blob1Y = useSharedValue(SCREEN_HEIGHT * 0.18);
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const screenW = windowWidth || SCREEN_WIDTH;
+  const screenH = windowHeight || SCREEN_HEIGHT;
+
+  const blob1X = useSharedValue(screenW * 0.15);
+  const blob1Y = useSharedValue(screenH * 0.18);
   const blob1Scale = useSharedValue(1);
 
-  const blob2X = useSharedValue(SCREEN_WIDTH * 0.8);
-  const blob2Y = useSharedValue(SCREEN_HEIGHT * 0.45);
+  const blob2X = useSharedValue(screenW * 0.8);
+  const blob2Y = useSharedValue(screenH * 0.45);
   const blob2Scale = useSharedValue(1.1);
 
-  const blob3X = useSharedValue(SCREEN_WIDTH * 0.35);
-  const blob3Y = useSharedValue(SCREEN_HEIGHT * 0.78);
+  const blob3X = useSharedValue(screenW * 0.35);
+  const blob3Y = useSharedValue(screenH * 0.78);
   const blob3Scale = useSharedValue(0.95);
 
   useEffect(() => {
     blob1X.value = withRepeat(
       withSequence(
-        withTiming(SCREEN_WIDTH * 0.35, { duration: 11000, easing: Easing.inOut(Easing.quad) }),
-        withTiming(SCREEN_WIDTH * 0.05, { duration: 13000, easing: Easing.inOut(Easing.quad) })
+        withTiming(screenW * 0.35, { duration: 11000, easing: Easing.inOut(Easing.quad) }),
+        withTiming(screenW * 0.05, { duration: 13000, easing: Easing.inOut(Easing.quad) })
       ),
       -1,
       true
     );
     blob1Y.value = withRepeat(
       withSequence(
-        withTiming(SCREEN_HEIGHT * 0.28, { duration: 12000, easing: Easing.inOut(Easing.quad) }),
-        withTiming(SCREEN_HEIGHT * 0.12, { duration: 14000, easing: Easing.inOut(Easing.quad) })
+        withTiming(screenH * 0.28, { duration: 12000, easing: Easing.inOut(Easing.quad) }),
+        withTiming(screenH * 0.12, { duration: 14000, easing: Easing.inOut(Easing.quad) })
       ),
       -1,
       true
@@ -266,16 +271,16 @@ function DriftingBlobs({ theme }) {
 
     blob2X.value = withRepeat(
       withSequence(
-        withTiming(SCREEN_WIDTH * 0.65, { duration: 14000, easing: Easing.inOut(Easing.quad) }),
-        withTiming(SCREEN_WIDTH * 0.9, { duration: 12000, easing: Easing.inOut(Easing.quad) })
+        withTiming(screenW * 0.65, { duration: 14000, easing: Easing.inOut(Easing.quad) }),
+        withTiming(screenW * 0.9, { duration: 12000, easing: Easing.inOut(Easing.quad) })
       ),
       -1,
       true
     );
     blob2Y.value = withRepeat(
       withSequence(
-        withTiming(SCREEN_HEIGHT * 0.35, { duration: 10000, easing: Easing.inOut(Easing.quad) }),
-        withTiming(SCREEN_HEIGHT * 0.58, { duration: 13000, easing: Easing.inOut(Easing.quad) })
+        withTiming(screenH * 0.35, { duration: 10000, easing: Easing.inOut(Easing.quad) }),
+        withTiming(screenH * 0.58, { duration: 13000, easing: Easing.inOut(Easing.quad) })
       ),
       -1,
       true
@@ -283,21 +288,21 @@ function DriftingBlobs({ theme }) {
 
     blob3X.value = withRepeat(
       withSequence(
-        withTiming(SCREEN_WIDTH * 0.55, { duration: 12500, easing: Easing.inOut(Easing.quad) }),
-        withTiming(SCREEN_WIDTH * 0.2, { duration: 13500, easing: Easing.inOut(Easing.quad) })
+        withTiming(screenW * 0.55, { duration: 12500, easing: Easing.inOut(Easing.quad) }),
+        withTiming(screenW * 0.2, { duration: 13500, easing: Easing.inOut(Easing.quad) })
       ),
       -1,
       true
     );
     blob3Y.value = withRepeat(
       withSequence(
-        withTiming(SCREEN_HEIGHT * 0.68, { duration: 11500, easing: Easing.inOut(Easing.quad) }),
-        withTiming(SCREEN_HEIGHT * 0.86, { duration: 12500, easing: Easing.inOut(Easing.quad) })
+        withTiming(screenH * 0.68, { duration: 11500, easing: Easing.inOut(Easing.quad) }),
+        withTiming(screenH * 0.86, { duration: 12500, easing: Easing.inOut(Easing.quad) })
       ),
       -1,
       true
     );
-  }, [blob1Scale, blob1X, blob1Y, blob2X, blob2Y, blob3X, blob3Y]);
+  }, [screenW, screenH, blob1Scale, blob1X, blob1Y, blob2X, blob2Y, blob3X, blob3Y]);
 
   const styleBlob1 = useAnimatedStyle(() => ({
     transform: [
@@ -886,6 +891,8 @@ function HomeScreen({
   const [categoryInput, setCategoryInput] = useState("All");
   const insets = useSafeAreaInsets();
   const updateInfo = getUpdateInfo();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const isTabletOrDesktop = windowWidth >= 640;
 
   const resetForm = () => {
     setUrlInput("");
@@ -1452,7 +1459,13 @@ function HomeScreen({
         {/* Liquid Glass Pill FAB */}
         <Animated.View
           entering={FadeIn.duration(400)}
-          style={[styles.fabContainer, { bottom: insets.bottom + 20 }]}
+          style={[
+            styles.fabContainer,
+            {
+              bottom: insets.bottom + 20,
+              right: isTabletOrDesktop ? Math.max(20, (windowWidth - 900) / 2 + 20) : 20,
+            },
+          ]}
         >
           <TouchableOpacity
             style={[styles.fabPressable, theme.glowShadow]}
@@ -1478,7 +1491,13 @@ function HomeScreen({
           transparent
           onRequestClose={() => setProfileModal(false)}
         >
-          <Pressable style={styles.modalBackdrop} onPress={() => setProfileModal(false)}>
+          <Pressable
+            style={[
+              styles.modalBackdrop,
+              isTabletOrDesktop && styles.modalBackdropCentered,
+            ]}
+            onPress={() => setProfileModal(false)}
+          >
             <Animated.View
               entering={SlideInDown.springify().damping(18)}
               style={styles.modalSheetWrap}
@@ -1487,7 +1506,11 @@ function HomeScreen({
                 theme={theme}
                 radius={radii.xxl}
                 intensity={theme.blurIntensityHeavy}
-                style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16 }]}
+                style={[
+                  styles.modalSheet,
+                  isTabletOrDesktop && styles.modalSheetCentered,
+                  { paddingBottom: Math.max(insets.bottom, 20) + 16 },
+                ]}
               >
                 <View style={styles.dragPillHandle}>
                   <View style={[styles.dragPill, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
@@ -1554,7 +1577,13 @@ function HomeScreen({
           transparent
           onRequestClose={() => setSettingsModal(false)}
         >
-          <Pressable style={styles.modalBackdrop} onPress={() => setSettingsModal(false)}>
+          <Pressable
+            style={[
+              styles.modalBackdrop,
+              isTabletOrDesktop && styles.modalBackdropCentered,
+            ]}
+            onPress={() => setSettingsModal(false)}
+          >
             <Animated.View
               entering={SlideInDown.springify().damping(18)}
               style={styles.modalSheetWrap}
@@ -1563,7 +1592,11 @@ function HomeScreen({
                 theme={theme}
                 radius={radii.xxl}
                 intensity={theme.blurIntensityHeavy}
-                style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16, maxHeight: SCREEN_HEIGHT * 0.88 }]}
+                style={[
+                  styles.modalSheet,
+                  isTabletOrDesktop && styles.modalSheetCentered,
+                  { paddingBottom: Math.max(insets.bottom, 20) + 16, maxHeight: windowHeight * 0.88 },
+                ]}
               >
                 <View style={styles.dragPillHandle}>
                   <View style={[styles.dragPill, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
@@ -1864,7 +1897,10 @@ function HomeScreen({
         >
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : undefined}
-            style={styles.modalBackdrop}
+            style={[
+              styles.modalBackdrop,
+              isTabletOrDesktop && styles.modalBackdropCentered,
+            ]}
           >
             <Pressable style={styles.modalDismissOverlay} onPress={() => setImportModal(false)} />
             <Animated.View
@@ -1875,7 +1911,11 @@ function HomeScreen({
                 theme={theme}
                 radius={radii.xxl}
                 intensity={theme.blurIntensityHeavy}
-                style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16 }]}
+                style={[
+                  styles.modalSheet,
+                  isTabletOrDesktop && styles.modalSheetCentered,
+                  { paddingBottom: Math.max(insets.bottom, 20) + 16 },
+                ]}
               >
                 <View style={styles.modalHeaderRow}>
                   <Text style={[styles.modalTitle, { color: theme.textPrimary }]}>
@@ -1947,7 +1987,10 @@ function HomeScreen({
         >
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : undefined}
-            style={styles.modalBackdrop}
+            style={[
+              styles.modalBackdrop,
+              isTabletOrDesktop && styles.modalBackdropCentered,
+            ]}
           >
             <Pressable style={styles.modalDismissOverlay} onPress={() => setModalVisible(false)} />
 
@@ -1960,7 +2003,11 @@ function HomeScreen({
                 theme={theme}
                 radius={radii.xxl}
                 intensity={theme.blurIntensityHeavy}
-                style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16 }]}
+                style={[
+                  styles.modalSheet,
+                  isTabletOrDesktop && styles.modalSheetCentered,
+                  { paddingBottom: Math.max(insets.bottom, 20) + 16 },
+                ]}
               >
                 <View style={styles.dragPillHandle}>
                   <View
@@ -2217,6 +2264,8 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
   const [forceDark, setForceDark] = useState(false);
   const [deckSwitcherVisible, setDeckSwitcherVisible] = useState(false);
   const insets = useSafeAreaInsets();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const isTabletOrDesktop = windowWidth >= 640;
 
   // Cycle text zoom levels
   const cycleZoom = () => {
@@ -2870,7 +2919,13 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
         transparent
         onRequestClose={() => setDeckSwitcherVisible(false)}
       >
-        <Pressable style={styles.modalBackdrop} onPress={() => setDeckSwitcherVisible(false)}>
+        <Pressable
+          style={[
+            styles.modalBackdrop,
+            isTabletOrDesktop && styles.modalBackdropCentered,
+          ]}
+          onPress={() => setDeckSwitcherVisible(false)}
+        >
           <Animated.View
             entering={SlideInDown.springify().damping(18)}
             style={styles.modalSheetWrap}
@@ -2879,7 +2934,11 @@ function SiteScreen({ site, sites = [], theme, isDark, user, onBack, onForgetLog
               theme={theme}
               radius={radii.xxl}
               intensity={theme.blurIntensityHeavy}
-              style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 20) + 16, maxHeight: SCREEN_HEIGHT * 0.72 }]}
+              style={[
+                styles.modalSheet,
+                isTabletOrDesktop && styles.modalSheetCentered,
+                { paddingBottom: Math.max(insets.bottom, 20) + 16, maxHeight: windowHeight * 0.78 },
+              ]}
             >
               <View style={styles.dragPillHandle}>
                 <View style={[styles.dragPill, { backgroundColor: theme.isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.15)" }]} />
@@ -2966,6 +3025,8 @@ export default function App() {
   // Theme preference
   const systemScheme = useColorScheme();
   const [themeMode, setThemeMode] = useState("auto");
+  const { width: windowWidth } = useWindowDimensions();
+  const isTabletOrDesktop = windowWidth >= 640;
 
   const isDark = themeMode === "auto" ? systemScheme === "dark" : themeMode === "dark";
   const theme = isDark ? darkTheme : lightTheme;
@@ -3341,11 +3402,21 @@ export default function App() {
           onRequestClose={() => setAccountPickerVisible(false)}
         >
           <Pressable
-            style={styles.accountPickerBackdrop}
+            style={[
+              styles.accountPickerBackdrop,
+              isTabletOrDesktop && styles.modalBackdropCentered,
+            ]}
             onPress={() => setAccountPickerVisible(false)}
           >
             <Pressable style={styles.accountPickerSheetOuter} onPress={() => {}}>
-              <GlassSurface theme={theme} radius={radii.xxl} style={styles.accountPickerSheet}>
+              <GlassSurface
+                theme={theme}
+                radius={radii.xxl}
+                style={[
+                  styles.accountPickerSheet,
+                  isTabletOrDesktop && styles.modalSheetCentered,
+                ]}
+              >
                 {/* Handle bar */}
                 <View style={[styles.accountPickerHandle, { backgroundColor: theme.glassBorder }]} />
 
@@ -3498,6 +3569,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 8,
     paddingBottom: 6,
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
   },
   headerGlass: {
     paddingHorizontal: 18,
@@ -3620,6 +3694,9 @@ const styles = StyleSheet.create({
   searchBarPad: {
     paddingHorizontal: 16,
     paddingBottom: 6,
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
   },
   searchBarGlass: {
     paddingHorizontal: 16,
@@ -3660,7 +3737,11 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    paddingHorizontal: 32,
+    paddingHorizontal: 20,
+    paddingTop: 30,
+    width: "100%",
+    maxWidth: 640,
+    alignSelf: "center",
   },
   noResultsGlass: {
     width: "100%",
@@ -3733,13 +3814,16 @@ const styles = StyleSheet.create({
   recentPillName: {
     fontSize: 13,
     fontWeight: "700",
-    maxWidth: 100,
+    maxWidth: 140,
   },
 
   // Tiles
   listContent: {
     paddingHorizontal: 16,
     paddingTop: 10,
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
   },
   tileOuter: {
     marginBottom: 12,
@@ -3924,6 +4008,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     paddingHorizontal: 24,
+    width: "100%",
+    maxWidth: 640,
+    alignSelf: "center",
   },
   emptyGlass: {
     width: "100%",
@@ -4060,17 +4147,28 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
     backgroundColor: "rgba(0,0,0,0.5)",
   },
+  modalBackdropCentered: {
+    justifyContent: "center",
+    alignItems: "center",
+    padding: 24,
+  },
   modalDismissOverlay: {
     flex: 1,
   },
   modalSheetWrap: {
     width: "100%",
+    maxWidth: 580,
+    alignSelf: "center",
   },
   modalSheet: {
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     paddingHorizontal: 24,
     paddingTop: 12,
+  },
+  modalSheetCentered: {
+    borderBottomLeftRadius: radii.xxl,
+    borderBottomRightRadius: radii.xxl,
   },
   dragPillHandle: {
     alignItems: "center",
@@ -4168,13 +4266,17 @@ const styles = StyleSheet.create({
   },
   siteFloatingHeaderWrap: {
     position: "absolute",
-    left: 12,
-    right: 12,
+    left: 0,
+    right: 0,
     zIndex: 999,
+    alignItems: "center",
+    paddingHorizontal: 12,
   },
   siteHeaderGlass: {
     paddingHorizontal: 14,
     paddingVertical: 10,
+    width: "100%",
+    maxWidth: 920,
   },
   siteHeaderRow: {
     flexDirection: "row",
@@ -4390,6 +4492,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 4,
     paddingBottom: 4,
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
   },
   categoryBarContent: {
     paddingRight: 16,
@@ -4491,6 +4596,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingTop: 4,
     paddingBottom: 6,
+    width: "100%",
+    maxWidth: 920,
+    alignSelf: "center",
   },
   updateBannerGlass: {
     paddingHorizontal: 16,
@@ -4622,16 +4730,17 @@ const styles = StyleSheet.create({
   // VisionOS Bottom Navigation Dock
   siteBottomDockWrap: {
     position: "absolute",
-    left: 16,
-    right: 16,
+    left: 0,
+    right: 0,
     zIndex: 999,
     alignItems: "center",
+    paddingHorizontal: 16,
   },
   siteBottomDockGlass: {
     paddingHorizontal: 12,
     paddingVertical: 8,
     width: "100%",
-    maxWidth: 440,
+    maxWidth: 460,
   },
   siteBottomDockRow: {
     flexDirection: "row",
@@ -4956,7 +5065,9 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   accountPickerSheetOuter: {
-    // prevent backdrop tap from propagating through the sheet
+    width: "100%",
+    maxWidth: 520,
+    alignSelf: "center",
   },
   accountPickerSheet: {
     paddingTop: 10,
