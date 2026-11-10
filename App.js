@@ -1896,7 +1896,8 @@ function HomeScreen({
           onRequestClose={() => setImportModal(false)}
         >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 20}
             style={[
               styles.modalBackdrop,
               isTabletOrDesktop && styles.modalBackdropCentered,
@@ -1986,7 +1987,8 @@ function HomeScreen({
           onRequestClose={() => setModalVisible(false)}
         >
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 10 : 20}
             style={[
               styles.modalBackdrop,
               isTabletOrDesktop && styles.modalBackdropCentered,
@@ -2006,7 +2008,10 @@ function HomeScreen({
                 style={[
                   styles.modalSheet,
                   isTabletOrDesktop && styles.modalSheetCentered,
-                  { paddingBottom: Math.max(insets.bottom, 20) + 16 },
+                  {
+                    paddingBottom: Math.max(insets.bottom, 16) + 12,
+                    maxHeight: isTabletOrDesktop ? 640 : Math.min(windowHeight * 0.88, 580),
+                  },
                 ]}
               >
                 <View style={styles.dragPillHandle}>
@@ -2036,204 +2041,251 @@ function HomeScreen({
                   </TouchableOpacity>
                 </View>
 
-                <Text style={[styles.modalDesc, { color: theme.textSecondary }]}>
-                  {editingSite
-                    ? "Customize portal title, category, emoji icon, or custom accent color."
-                    : "Paste any web URL. We will automatically fetch its high-res icon and configure a custom liquid app view with zero stale caches."}
-                </Text>
-
-                <View
-                  style={[
-                    styles.glassInputWrap,
-                    {
-                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.8)",
-                      borderColor: theme.glassBorder,
-                    },
-                  ]}
+                <ScrollView
+                  style={styles.modalScrollBody}
+                  contentContainerStyle={styles.modalScrollBodyContent}
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
                 >
-                  <Text style={styles.inputPrefixIcon}>🌐</Text>
-                  <TextInput
-                    style={[styles.glassInput, { color: theme.textPrimary }]}
-                    placeholder="Website URL (e.g. github.com)"
-                    placeholderTextColor={theme.textTertiary}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    keyboardType="url"
-                    value={urlInput}
-                    onChangeText={setUrlInput}
-                    autoFocus={!editingSite}
-                  />
-                </View>
+                  <Text style={[styles.modalDesc, { color: theme.textSecondary }]}>
+                    {editingSite
+                      ? "Customize portal title, category, emoji icon, or custom accent color."
+                      : "Paste any web URL. We will automatically fetch its high-res icon and configure a custom liquid app view with zero stale caches."}
+                  </Text>
 
-                <View
-                  style={[
-                    styles.glassInputWrap,
-                    {
-                      backgroundColor: theme.isDark ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.8)",
-                      borderColor: theme.glassBorder,
-                    },
-                  ]}
-                >
-                  <Text style={styles.inputPrefixIcon}>🏷️</Text>
-                  <TextInput
-                    style={[styles.glassInput, { color: theme.textPrimary }]}
-                    placeholder="Custom name (optional)"
-                    placeholderTextColor={theme.textTertiary}
-                    value={nameInput}
-                    onChangeText={setNameInput}
-                  />
-                </View>
-
-                {/* Category Selection in Add Modal */}
-                <View style={styles.modalCategorySection}>
-                  <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Category</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modalCategoryScroll}>
-                    {APP_CATEGORIES.filter(c => c !== "All").map((cat) => {
-                      const isSel = categoryInput === cat;
-                      const meta = CATEGORY_META[cat] || { emoji: "🌐" };
-                      return (
-                        <TouchableOpacity
-                          key={cat}
-                          onPress={() => setCategoryInput(isSel ? "All" : cat)}
-                          style={[
-                            styles.modalCategoryPill,
-                            {
-                              backgroundColor: isSel
-                                ? theme.accent
-                                : theme.isDark
-                                ? "rgba(255, 255, 255, 0.07)"
-                                : "rgba(0, 0, 0, 0.05)",
-                              borderColor: isSel ? theme.accent : theme.glassBorder,
-                            },
-                          ]}
-                        >
-                          <Text style={styles.categoryPillEmoji}>{meta.emoji}</Text>
-                          <Text
-                            style={[
-                              styles.modalCategoryPillText,
-                              { color: isSel ? "#FFFFFF" : theme.textSecondary, fontWeight: isSel ? "700" : "500" },
-                            ]}
-                          >
-                            {cat}
-                          </Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-
-                {/* Custom Emoji Picker (Optional) */}
-                <View style={styles.modalCategorySection}>
-                  <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Custom Emoji Icon (Optional)</Text>
-                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modalCategoryScroll}>
-                    <TouchableOpacity
-                      onPress={() => setEmojiInput("")}
-                      style={[
-                        styles.modalEmojiPill,
-                        {
-                          backgroundColor: !emojiInput ? theme.accentGlow : (theme.isDark ? "rgba(255, 255, 255, 0.07)" : "rgba(0, 0, 0, 0.05)"),
-                          borderColor: !emojiInput ? theme.accent : theme.glassBorder,
-                        },
-                      ]}
-                    >
-                      <Text style={[styles.modalEmojiPillText, { color: !emojiInput ? theme.accent : theme.textSecondary }]}>
-                        Auto Favicon
-                      </Text>
-                    </TouchableOpacity>
-                    {PRESET_EMOJIS.map((em) => {
-                      const isSel = emojiInput === em;
-                      return (
-                        <TouchableOpacity
-                          key={em}
-                          onPress={() => setEmojiInput(isSel ? "" : em)}
-                          style={[
-                            styles.modalEmojiBtn,
-                            {
-                              backgroundColor: isSel ? theme.accentGlow : (theme.isDark ? "rgba(255, 255, 255, 0.07)" : "rgba(0, 0, 0, 0.05)"),
-                              borderColor: isSel ? theme.accent : theme.glassBorder,
-                            },
-                          ]}
-                        >
-                          <Text style={styles.modalEmojiChar}>{em}</Text>
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </ScrollView>
-                </View>
-
-                {/* Accent Color Picker (Optional) */}
-                <View style={styles.modalCategorySection}>
-                  <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Card Accent Color (Optional)</Text>
-                  <View style={styles.modalColorRow}>
-                    <TouchableOpacity
-                      onPress={() => setColorInput("")}
-                      style={[
-                        styles.modalColorCircle,
-                        {
-                          backgroundColor: theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
-                          borderColor: !colorInput ? theme.accent : theme.glassBorder,
-                          borderWidth: !colorInput ? 2 : 1,
-                        },
-                      ]}
-                    >
-                      <Text style={{ fontSize: 10, color: theme.textSecondary, fontWeight: "700" }}>AUTO</Text>
-                    </TouchableOpacity>
-                    {PRESET_COLORS.map((c) => {
-                      const isSel = colorInput === c;
-                      return (
-                        <TouchableOpacity
-                          key={c}
-                          onPress={() => setColorInput(isSel ? "" : c)}
-                          style={[
-                            styles.modalColorCircle,
-                            {
-                              backgroundColor: c,
-                              borderColor: isSel ? "#FFFFFF" : "transparent",
-                              borderWidth: isSel ? 2.5 : 0,
-                            },
-                          ]}
-                        />
-                      );
-                    })}
-                  </View>
-                </View>
-
-                <View style={styles.modalActionRow}>
-                  <TouchableOpacity
+                  {/* URL Input with Inline Paste & Clear Controls */}
+                  <View
                     style={[
-                      styles.modalCancelBtn,
+                      styles.glassInputWrap,
                       {
-                        backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)",
+                        backgroundColor: theme.isDark ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.8)",
                         borderColor: theme.glassBorder,
                       },
                     ]}
-                    onPress={() => {
-                      resetForm();
-                      setModalVisible(false);
-                    }}
                   >
-                    <Text style={[styles.modalCancelBtnText, { color: theme.textSecondary }]}>
-                      Cancel
-                    </Text>
-                  </TouchableOpacity>
+                    <Text style={styles.inputPrefixIcon}>🌐</Text>
+                    <TextInput
+                      style={[styles.glassInput, { color: theme.textPrimary }]}
+                      placeholder="Website URL (e.g. github.com)"
+                      placeholderTextColor={theme.textTertiary}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      keyboardType="url"
+                      value={urlInput}
+                      onChangeText={setUrlInput}
+                    />
+                    {urlInput.length > 0 ? (
+                      <TouchableOpacity
+                        onPress={() => setUrlInput("")}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={styles.inputInlineBtn}
+                        accessibilityLabel="Clear URL"
+                      >
+                        <Text style={[styles.inputClearIcon, { color: theme.textTertiary }]}>✕</Text>
+                      </TouchableOpacity>
+                    ) : (
+                      <TouchableOpacity
+                        onPress={async () => {
+                          try {
+                            const text = await Clipboard.getString();
+                            if (text) {
+                              const norm = normalizeUrl(text.trim()) || text.trim();
+                              setUrlInput(norm);
+                              if (!nameInput) setNameInput(hostnameOf(norm));
+                              showToast("📋 Pasted from clipboard");
+                            }
+                          } catch (e) {}
+                        }}
+                        style={[styles.inputPastePill, { backgroundColor: theme.accentGlow }]}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityLabel="Paste URL from clipboard"
+                      >
+                        <Text style={[styles.inputPasteText, { color: theme.accent }]}>PASTE</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
 
-                  <TouchableOpacity
-                    style={[styles.modalSaveBtn, theme.glowShadow]}
-                    onPress={handleSave}
-                    activeOpacity={0.88}
+                  {/* Name Input with Clear Control */}
+                  <View
+                    style={[
+                      styles.glassInputWrap,
+                      {
+                        backgroundColor: theme.isDark ? "rgba(255,255,255,0.05)" : "rgba(255,255,255,0.8)",
+                        borderColor: theme.glassBorder,
+                      },
+                    ]}
                   >
-                    <LinearGradient
-                      colors={theme.fabGradient}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 1 }}
-                      style={styles.modalSaveGradient}
+                    <Text style={styles.inputPrefixIcon}>🏷️</Text>
+                    <TextInput
+                      style={[styles.glassInput, { color: theme.textPrimary }]}
+                      placeholder="Custom name (optional)"
+                      placeholderTextColor={theme.textTertiary}
+                      value={nameInput}
+                      onChangeText={setNameInput}
+                    />
+                    {nameInput.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() => setNameInput("")}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        style={styles.inputInlineBtn}
+                        accessibilityLabel="Clear custom name"
+                      >
+                        <Text style={[styles.inputClearIcon, { color: theme.textTertiary }]}>✕</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+
+                  {/* Category Selection in Add Modal */}
+                  <View style={styles.modalCategorySection}>
+                    <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Category</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modalCategoryScroll}>
+                      {APP_CATEGORIES.filter(c => c !== "All").map((cat) => {
+                        const isSel = categoryInput === cat;
+                        const meta = CATEGORY_META[cat] || { emoji: "🌐" };
+                        return (
+                          <TouchableOpacity
+                            key={cat}
+                            onPress={() => setCategoryInput(isSel ? "All" : cat)}
+                            style={[
+                              styles.modalCategoryPill,
+                              {
+                                backgroundColor: isSel
+                                  ? theme.accent
+                                  : theme.isDark
+                                  ? "rgba(255, 255, 255, 0.07)"
+                                  : "rgba(0, 0, 0, 0.05)",
+                                borderColor: isSel ? theme.accent : theme.glassBorder,
+                              },
+                            ]}
+                          >
+                            <Text style={styles.categoryPillEmoji}>{meta.emoji}</Text>
+                            <Text
+                              style={[
+                                styles.modalCategoryPillText,
+                                { color: isSel ? "#FFFFFF" : theme.textSecondary, fontWeight: isSel ? "700" : "500" },
+                              ]}
+                            >
+                              {cat}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+
+                  {/* Custom Emoji Picker (Optional) */}
+                  <View style={styles.modalCategorySection}>
+                    <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Custom Emoji Icon (Optional)</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.modalCategoryScroll}>
+                      <TouchableOpacity
+                        onPress={() => setEmojiInput("")}
+                        style={[
+                          styles.modalEmojiPill,
+                          {
+                            backgroundColor: !emojiInput ? theme.accentGlow : (theme.isDark ? "rgba(255, 255, 255, 0.07)" : "rgba(0, 0, 0, 0.05)"),
+                            borderColor: !emojiInput ? theme.accent : theme.glassBorder,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.modalEmojiPillText, { color: !emojiInput ? theme.accent : theme.textSecondary }]}>
+                          Auto Favicon
+                        </Text>
+                      </TouchableOpacity>
+                      {PRESET_EMOJIS.map((em) => {
+                        const isSel = emojiInput === em;
+                        return (
+                          <TouchableOpacity
+                            key={em}
+                            onPress={() => setEmojiInput(isSel ? "" : em)}
+                            style={[
+                              styles.modalEmojiBtn,
+                              {
+                                backgroundColor: isSel ? theme.accentGlow : (theme.isDark ? "rgba(255, 255, 255, 0.07)" : "rgba(0, 0, 0, 0.05)"),
+                                borderColor: isSel ? theme.accent : theme.glassBorder,
+                              },
+                            ]}
+                          >
+                            <Text style={styles.modalEmojiChar}>{em}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+
+                  {/* Accent Color Picker (Optional) */}
+                  <View style={styles.modalCategorySection}>
+                    <Text style={[styles.modalCategoryTitle, { color: theme.textSecondary }]}>Card Accent Color (Optional)</Text>
+                    <View style={styles.modalColorRow}>
+                      <TouchableOpacity
+                        onPress={() => setColorInput("")}
+                        style={[
+                          styles.modalColorCircle,
+                          {
+                            backgroundColor: theme.isDark ? "rgba(255,255,255,0.1)" : "rgba(0,0,0,0.06)",
+                            borderColor: !colorInput ? theme.accent : theme.glassBorder,
+                            borderWidth: !colorInput ? 2 : 1,
+                          },
+                        ]}
+                      >
+                        <Text style={{ fontSize: 10, color: theme.textSecondary, fontWeight: "700" }}>AUTO</Text>
+                      </TouchableOpacity>
+                      {PRESET_COLORS.map((c) => {
+                        const isSel = colorInput === c;
+                        return (
+                          <TouchableOpacity
+                            key={c}
+                            onPress={() => setColorInput(isSel ? "" : c)}
+                            style={[
+                              styles.modalColorCircle,
+                              {
+                                backgroundColor: c,
+                                borderColor: isSel ? "#FFFFFF" : "transparent",
+                                borderWidth: isSel ? 2.5 : 0,
+                              },
+                            ]}
+                          />
+                        );
+                      })}
+                    </View>
+                  </View>
+
+                  <View style={styles.modalActionRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.modalCancelBtn,
+                        {
+                          backgroundColor: theme.isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.05)",
+                          borderColor: theme.glassBorder,
+                        },
+                      ]}
+                      onPress={() => {
+                        resetForm();
+                        setModalVisible(false);
+                      }}
                     >
-                      <Text style={styles.modalSaveBtnText}>
-                        {editingSite ? "Save Changes" : "Save Portal"}
+                      <Text style={[styles.modalCancelBtnText, { color: theme.textSecondary }]}>
+                        Cancel
                       </Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
-                </View>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[styles.modalSaveBtn, theme.glowShadow]}
+                      onPress={handleSave}
+                      activeOpacity={0.88}
+                    >
+                      <LinearGradient
+                        colors={theme.fabGradient}
+                        start={{ x: 0, y: 0 }}
+                        end={{ x: 1, y: 1 }}
+                        style={styles.modalSaveGradient}
+                      >
+                        <Text style={styles.modalSaveBtnText}>
+                          {editingSite ? "Save Changes" : "Save Portal"}
+                        </Text>
+                      </LinearGradient>
+                    </TouchableOpacity>
+                  </View>
+                </ScrollView>
               </GlassSurface>
             </Animated.View>
           </KeyboardAvoidingView>
@@ -4204,7 +4256,14 @@ const styles = StyleSheet.create({
   modalDesc: {
     fontSize: 13,
     lineHeight: 18,
-    marginBottom: 20,
+    marginBottom: 16,
+  },
+  modalScrollBody: {
+    flexGrow: 0,
+    width: "100%",
+  },
+  modalScrollBodyContent: {
+    paddingBottom: 20,
   },
   glassInputWrap: {
     flexDirection: "row",
@@ -4223,6 +4282,26 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 15,
     fontWeight: "500",
+  },
+  inputInlineBtn: {
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    marginLeft: 6,
+  },
+  inputClearIcon: {
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  inputPastePill: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: radii.pill,
+    marginLeft: 6,
+  },
+  inputPasteText: {
+    fontSize: 11,
+    fontWeight: "800",
+    letterSpacing: 0.4,
   },
   modalActionRow: {
     flexDirection: "row",
